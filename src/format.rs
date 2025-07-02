@@ -6,9 +6,9 @@ use bytes::Bytes;
 // return characters are not allowed in the data field. Need escape character plus
 // a way to signal \r and 0x02.
 const ESCAPE_CHAR: u8 = 0x07;
-const HEX_02: u8 = 0x30; // ASCII '0'
-const HEX_0D: u8 = 0x31; // ASCII '1'
-const HEX_07: u8 = 0x32; // ASCII '2'
+const HEX_02_ESC: u8 = 0x30; // ASCII '0'
+const HEX_0D_ESC: u8 = 0x31; // ASCII '1'
+const HEX_07_ESC: u8 = 0x32; // ASCII '2'
 const MIN_PKT_SIZE: usize = 6;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -168,15 +168,15 @@ impl SmdpPacket {
         self.data.iter().for_each(|b| match b {
             0x02 => {
                 data.push(ESCAPE_CHAR);
-                data.push(HEX_02);
+                data.push(HEX_02_ESC);
             }
             0x0D => {
                 data.push(ESCAPE_CHAR);
-                data.push(HEX_0D);
+                data.push(HEX_0D_ESC);
             }
             0x07 => {
                 data.push(ESCAPE_CHAR);
-                data.push(HEX_07);
+                data.push(HEX_07_ESC);
             }
             _ => data.push(*b),
         });
@@ -280,11 +280,39 @@ mod test {
                 0x80,
                 0x05,
                 ESCAPE_CHAR,
-                HEX_02,
+                HEX_02_ESC,
                 ESCAPE_CHAR,
-                HEX_07,
+                HEX_07_ESC,
                 ESCAPE_CHAR,
-                HEX_0D,
+                HEX_0D_ESC,
+                chk1,
+                chk2,
+                b'\n'
+            ],
+            bytes
+        );
+    }
+    #[test]
+    fn serialize_packet_with_checksum_wrap_with_escape() {
+        let packet = SmdpPacket::new(150, 8, vec![5, 2, 7, 13]);
+        assert!(packet.is_ok());
+        let bytes = packet.unwrap().to_bytes();
+        // Checksum calculated on non-escaped data!
+        let checksum = 150u8.wrapping_add(128).wrapping_add(27);
+        let chk1 = ((checksum & 0b11110000) >> 4) + 0x30;
+        let chk2 = (checksum & 0b1111) + 0x30;
+        assert_eq!(
+            vec![
+                0x02u8,
+                0x96,
+                0x80,
+                0x05,
+                ESCAPE_CHAR,
+                HEX_02_ESC,
+                ESCAPE_CHAR,
+                HEX_07_ESC,
+                ESCAPE_CHAR,
+                HEX_0D_ESC,
                 chk1,
                 chk2,
                 b'\n'
