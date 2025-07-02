@@ -127,3 +127,41 @@ pub struct SmdpPacket {
     checksum_1: u8,
     checksum_2: u8,
 }
+impl SmdpPacket {
+    /// Computes the Modulo 256 checksum of the Address, Command Response, and Data fields
+    /// of the packet. Note that this should be performed BEFORE escaping!
+    fn mod256_checksum(&self) -> u8 {
+        let mut acc = self.addr + self.cmd_rsp.0;
+        self.data.iter().fold(acc, |acc, el| acc.wrapping_add(*el))
+    }
+    /// Convenience function to return the split mod256 checksum (MS nibble, LS nibble) plus
+    /// offset required by the packet format.
+    fn mod256_checksum_split(&self) -> (u8, u8) {
+        let acc = self.mod256_checksum();
+        ((acc & 0b11110000 >> 4) + 0x30, (acc & 0b1111) + 0x30)
+    }
+}
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_command_code_from_u8_reserved() {
+        let code = 1u8;
+        let res: Result<CommandCode> = code.try_into();
+        assert!(res.is_ok());
+        assert_eq!(res.unwrap(), CommandCode::Reserved);
+
+        let code = 2u8;
+        let res: Result<CommandCode> = code.try_into();
+        assert!(res.is_ok());
+        assert_eq!(res.unwrap(), CommandCode::Reserved);
+    }
+    #[test]
+    fn test_command_response_ok() {
+        let cmd_rsp = CommandResponse(0b11010101u8);
+        assert_eq!(cmd_rsp.cmd().unwrap(), CommandCode::App(13));
+        assert_eq!(cmd_rsp.rspf(), false);
+        assert_eq!(cmd_rsp.rsp().unwrap(), ResponseCode::ErrInhibited);
+    }
+}
