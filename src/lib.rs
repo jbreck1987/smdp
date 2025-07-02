@@ -132,6 +132,7 @@ impl SmdpPacket {
     /// of the packet. Note that this should be performed BEFORE escaping!
     fn mod256_checksum(&self) -> u8 {
         let mut acc = self.addr + self.cmd_rsp.0;
+        // `wrapping_add()` gives mod 256 behavior for u8 sums
         self.data.iter().fold(acc, |acc, el| acc.wrapping_add(*el))
     }
     /// Convenience function to return the split mod256 checksum (MS nibble, LS nibble) plus
