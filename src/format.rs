@@ -1,5 +1,6 @@
 use anyhow::{Error, Result, anyhow};
 use bitfield::{Bit, BitRange};
+use bytes::Bytes;
 
 // Since the protocol is binary transparent, STX and carriage
 // return characters are not allowed in the data field. Need escape character plus
@@ -8,6 +9,7 @@ const ESCAPE_CHAR: u8 = 0x07;
 const HEX_02: u8 = 0x30; // ASCII '0'
 const HEX_0D: u8 = 0x31; // ASCII '1'
 const HEX_07: u8 = 0x32; // ASCII '2'
+const MIN_PKT_SIZE: usize = 6;
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum ResponseCode {
@@ -153,6 +155,36 @@ impl SmdpPacket {
             checksum_1,
             checksum_2,
         })
+    }
+    /// Serializes the packet into bytes after escaping characters in the payload.
+    fn to_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(MIN_PKT_SIZE + self.data.len());
+        bytes.push(self.stx);
+        bytes.push(self.addr);
+        bytes.push(self.cmd_rsp.0);
+
+        // Walk data and escape characters as necessary.
+        let mut data = Vec::with_capacity(self.data.len() + 10);
+        self.data.iter().for_each(|b| match b {
+            0x02 => {
+                data.push(ESCAPE_CHAR);
+                data.push(HEX_02);
+            }
+            0x0D => {
+                data.push(ESCAPE_CHAR);
+                data.push(HEX_0D);
+            }
+            0x07 => {
+                data.push(ESCAPE_CHAR);
+                data.push(HEX_07);
+            }
+            _ => data.push(*b),
+        });
+        bytes.extend(data.into_iter());
+        bytes.push(self.checksum_1);
+        bytes.push(self.checksum_2);
+        bytes.push(b'\n');
+        bytes
     }
     /// Computes the Modulo 256 checksum of the Address, Command Response, and Data fields
     /// of the packet. Note that this should be performed BEFORE escaping!
