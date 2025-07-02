@@ -189,15 +189,15 @@ impl SmdpPacket {
     /// Computes the Modulo 256 checksum of the Address, Command Response, and Data fields
     /// of the packet. Note that this should be performed BEFORE escaping!
     fn mod256_checksum(data: &[u8], addr: u8, cmd_rsp: u8) -> u8 {
-        let acc = addr + cmd_rsp;
         // `wrapping_add()` gives mod 256 behavior for u8 sums
+        let acc = addr.wrapping_add(cmd_rsp);
         data.iter().fold(acc, |acc, el| acc.wrapping_add(*el))
     }
     /// Convenience function to return the split mod256 checksum (MS nibble, LS nibble) plus
     /// offset required by the packet format.
     fn mod256_checksum_split(data: &[u8], addr: u8, cmd_rsp: u8) -> (u8, u8) {
         let acc = Self::mod256_checksum(data, addr, cmd_rsp);
-        ((acc & 0b11110000 >> 4) + 0x30, (acc & 0b1111) + 0x30)
+        (((acc & 0b11110000) >> 4) + 0x30, (acc & 0b1111) + 0x30)
     }
 }
 #[cfg(test)]
