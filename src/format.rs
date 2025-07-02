@@ -127,17 +127,44 @@ pub struct SmdpPacket {
     checksum_2: u8,
 }
 impl SmdpPacket {
+    pub fn new(addr: u8, cmd_code: u8, data: Vec<u8>) -> Result<Self> {
+        // Input validation. Using in case slaves do not handle
+        // error handling appropriately.
+        if addr < 0x10 || addr > 0xFE {
+            return Err(anyhow!(
+                "{} is an invalid address. Valid addresses are 16 - 254",
+                addr
+            ));
+        }
+        if cmd_code < 0x01 || cmd_code > 0x0F {
+            return Err(anyhow!(
+                "{} is an invalid command code. Valid codes are 1 - 15",
+                cmd_code
+            ));
+        }
+
+        let cmd_rsp = CommandResponse(cmd_code << 4);
+        let (checksum_1, checksum_2) = Self::mod256_checksum_split(&data, addr, cmd_rsp.0);
+        Ok(Self {
+            stx: 0x02,
+            addr,
+            cmd_rsp,
+            data,
+            checksum_1,
+            checksum_2,
+        })
+    }
     /// Computes the Modulo 256 checksum of the Address, Command Response, and Data fields
     /// of the packet. Note that this should be performed BEFORE escaping!
-    fn mod256_checksum(&self) -> u8 {
-        let mut acc = self.addr + self.cmd_rsp.0;
+    fn mod256_checksum(data: &[u8], addr: u8, cmd_rsp: u8) -> u8 {
+        let acc = addr + cmd_rsp;
         // `wrapping_add()` gives mod 256 behavior for u8 sums
-        self.data.iter().fold(acc, |acc, el| acc.wrapping_add(*el))
+        data.iter().fold(acc, |acc, el| acc.wrapping_add(*el))
     }
     /// Convenience function to return the split mod256 checksum (MS nibble, LS nibble) plus
     /// offset required by the packet format.
-    fn mod256_checksum_split(&self) -> (u8, u8) {
-        let acc = self.mod256_checksum();
+    fn mod256_checksum_split(data: &[u8], addr: u8, cmd_rsp: u8) -> (u8, u8) {
+        let acc = Self::mod256_checksum(data, addr, cmd_rsp);
         ((acc & 0b11110000 >> 4) + 0x30, (acc & 0b1111) + 0x30)
     }
 }
