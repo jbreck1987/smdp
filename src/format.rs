@@ -191,4 +191,19 @@ mod test {
         assert_eq!(cmd_rsp.rspf(), false);
         assert_eq!(cmd_rsp.rsp().unwrap(), ResponseCode::ErrInhibited);
     }
+    #[test]
+    fn build_new_packet_ok() {
+        let packet = SmdpPacket::new(16, 8, vec![10, 20]);
+        assert!(packet.is_ok());
+    }
+
+    #[test]
+    fn extract_cmd_rsp_vals_from_packet_ok() {
+        let packet = SmdpPacket::new(16, 8, vec![10, 20]);
+        assert!(packet.is_ok());
+        let cmd_rsp = packet.unwrap().cmd_rsp;
+        assert_eq!(cmd_rsp.cmd().unwrap(), CommandCode::App(8));
+        assert_eq!(cmd_rsp.rspf(), false);
+        assert!(cmd_rsp.rsp().is_err());
+    }
 }
