@@ -238,4 +238,30 @@ mod test {
         assert_eq!(cmd_rsp.rspf(), false);
         assert!(cmd_rsp.rsp().is_err());
     }
+    #[test]
+    fn serialize_packet_no_checksum_wrap_no_escape() {
+        let packet = SmdpPacket::new(16, 8, vec![10, 20]);
+        assert!(packet.is_ok());
+        let bytes = packet.unwrap().to_bytes();
+        let checksum = 16u8 + 128 + 30;
+        let chk1 = ((checksum & 0b11110000) >> 4) + 0x30;
+        let chk2 = (checksum & 0b1111) + 0x30;
+        assert_eq!(
+            vec![0x02u8, 0x10, 0x80, 0x0A, 0x14, chk1, chk2, b'\n'],
+            bytes
+        );
+    }
+    #[test]
+    fn serialize_packet_with_checksum_wrap_no_escape() {
+        let packet = SmdpPacket::new(150, 8, vec![10, 20]);
+        assert!(packet.is_ok());
+        let bytes = packet.unwrap().to_bytes();
+        let checksum = 150u8.wrapping_add(128).wrapping_add(30);
+        let chk1 = ((checksum & 0b11110000) >> 4) + 0x30;
+        let chk2 = (checksum & 0b1111) + 0x30;
+        assert_eq!(
+            vec![0x02u8, 0x96, 0x80, 0x0A, 0x14, chk1, chk2, b'\n'],
+            bytes
+        );
+    }
 }
