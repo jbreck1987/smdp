@@ -4,7 +4,7 @@ use bytes::Bytes;
 
 // Since the protocol is binary transparent, STX and carriage
 // return characters are not allowed in the data field. Need escape character plus
-// a way to signal \r and 0x02.
+// a way to signal '\r' and 0x02.
 const ESCAPE_CHAR: u8 = 0x07;
 const HEX_02_ESC: u8 = 0x30; // ASCII '0'
 const HEX_0D_ESC: u8 = 0x31; // ASCII '1'
@@ -183,7 +183,7 @@ impl SmdpPacket {
         bytes.extend(data.into_iter());
         bytes.push(self.checksum_1);
         bytes.push(self.checksum_2);
-        bytes.push(b'\n');
+        bytes.push(b'\r');
         bytes
     }
     /// Computes the Modulo 256 checksum of the Address, Command Response, and Data fields
@@ -247,7 +247,7 @@ mod test {
         let chk1 = ((checksum & 0b11110000) >> 4) + 0x30;
         let chk2 = (checksum & 0b1111) + 0x30;
         assert_eq!(
-            vec![0x02u8, 0x10, 0x80, 0x0A, 0x14, chk1, chk2, b'\n'],
+            vec![0x02u8, 0x10, 0x80, 0x0A, 0x14, chk1, chk2, b'\r'],
             bytes
         );
     }
@@ -260,7 +260,7 @@ mod test {
         let chk1 = ((checksum & 0b11110000) >> 4) + 0x30;
         let chk2 = (checksum & 0b1111) + 0x30;
         assert_eq!(
-            vec![0x02u8, 0x96, 0x80, 0x0A, 0x14, chk1, chk2, b'\n'],
+            vec![0x02u8, 0x96, 0x80, 0x0A, 0x14, chk1, chk2, b'\r'],
             bytes
         );
     }
@@ -287,7 +287,7 @@ mod test {
                 HEX_0D_ESC,
                 chk1,
                 chk2,
-                b'\n'
+                b'\r'
             ],
             bytes
         );
@@ -315,7 +315,7 @@ mod test {
                 HEX_0D_ESC,
                 chk1,
                 chk2,
-                b'\n'
+                b'\r'
             ],
             bytes
         );
