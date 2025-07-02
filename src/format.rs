@@ -264,4 +264,32 @@ mod test {
             bytes
         );
     }
+    #[test]
+    fn serialize_packet_no_checksum_wrap_with_escape() {
+        let packet = SmdpPacket::new(16, 8, vec![5, 2, 7, 13]);
+        assert!(packet.is_ok());
+        let bytes = packet.unwrap().to_bytes();
+        // Checksum calculated on non-escaped data!
+        let checksum = 16u8 + 128 + 27;
+        let chk1 = ((checksum & 0b11110000) >> 4) + 0x30;
+        let chk2 = (checksum & 0b1111) + 0x30;
+        assert_eq!(
+            vec![
+                0x02u8,
+                0x10,
+                0x80,
+                0x05,
+                ESCAPE_CHAR,
+                HEX_02,
+                ESCAPE_CHAR,
+                HEX_07,
+                ESCAPE_CHAR,
+                HEX_0D,
+                chk1,
+                chk2,
+                b'\n'
+            ],
+            bytes
+        );
+    }
 }
