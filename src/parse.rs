@@ -137,15 +137,12 @@ where
                         buf_slice.copy_from_slice(&self.chunk[..n_read]);
                         total_bytes_read += n_read;
                     } else {
-                        eprintln!("{}", total_bytes_read + n_read);
-                        self.chunk.fill(0);
                         return Err(anyhow!("Max frame size reached."));
                     }
                 }
                 // Chunk read blocked, continue to next chunk read
                 Err(ref e) if e.kind() == ErrorKind::WouldBlock => continue,
                 Err(e) => {
-                    self.chunk.fill(0);
                     return Err(anyhow!(e));
                 }
             }
@@ -154,7 +151,7 @@ where
                 break;
             }
         }
-        // Attempt to frame read bytes
+        // Attempt to frame bytes that were read
         self.framer.push_bytes(&self.read_buf[..total_bytes_read])
     }
 }
@@ -367,7 +364,7 @@ mod tests {
     }
     /* IOHANDLER TESTING */
     #[test]
-    fn test_io_read_bytes_no_delay() {
+    fn test_io_read_bytes_no_chunk_delay_long_stream() {
         // Create random data
         let mut rng = thread_rng();
         let mut data: [u8; 1024] = [0; 1024];
@@ -383,9 +380,101 @@ mod tests {
         let mock_framer = MockFramer::new(|buf| Ok(Bytes::copy_from_slice(buf)));
 
         // Build IoHandler and verify read is correct
-        let mut handler = SmdpIoHandler::new(mock_io, mock_framer, 200, 2048);
+        let mut handler = SmdpIoHandler::new(mock_io, mock_framer, 200, 1024);
         let resp = handler.poll_once();
         assert!(resp.is_ok());
         assert_eq!(resp.unwrap(), Bytes::copy_from_slice(&data));
+    }
+    #[test]
+    fn test_io_read_bytes_no_chunk_delay_short_stream() {
+        // Create random data
+        let mut rng = thread_rng();
+        let mut data: [u8; 20] = [0; 20];
+        rng.fill(&mut data);
+        let mut data_reader = Cursor::new(data.clone());
+
+        // Build MockIO
+        let writer = |_: &[u8]| return Ok(0usize);
+        let reader = |buf: &mut [u8]| data_reader.read(buf);
+        let mock_io = MockIo::new(reader, writer);
+
+        // Build MockFramer
+        let mock_framer = MockFramer::new(|buf| Ok(Bytes::copy_from_slice(buf)));
+
+        // Build IoHandler and verify read is correct
+        let mut handler = SmdpIoHandler::new(mock_io, mock_framer, 200, 1024);
+        let resp = handler.poll_once();
+        assert!(resp.is_ok());
+        assert_eq!(resp.unwrap(), Bytes::copy_from_slice(&data));
+    }
+    #[test]
+    fn test_io_read_bytes_no_50ms_chunk_delay() {
+        // Create random data
+        let mut rng = thread_rng();
+        let mut data: [u8; 1024] = [0; 1024];
+        rng.fill(&mut data);
+        let mut data_reader = Cursor::new(data.clone());
+
+        // Build MockIO with a delayed sender
+        let writer = |_: &[u8]| return Ok(0usize);
+        let reader = |buf: &mut [u8]| {
+            std::thread::sleep(Duration::from_millis(50));
+            data_reader.read(buf)
+        };
+        let mock_io = MockIo::new(reader, writer);
+
+        // Build MockFramer
+        let mock_framer = MockFramer::new(|buf| Ok(Bytes::copy_from_slice(buf)));
+
+        // Build IoHandler and verify read is correct
+        let mut handler = SmdpIoHandler::new(mock_io, mock_framer, 200, 1024);
+        let resp = handler.poll_once();
+        assert!(resp.is_ok());
+        assert_eq!(resp.unwrap(), Bytes::copy_from_slice(&data));
+    }
+    #[test]
+    fn test_io_read_too_many_bytes() {
+        // Create random data
+        let mut rng = thread_rng();
+        let mut data: [u8; 2048] = [0; 2048];
+        rng.fill(&mut data);
+        let mut data_reader = Cursor::new(data.clone());
+
+        // Build MockIO with a delayed sender
+        let writer = |_: &[u8]| return Ok(0usize);
+        let reader = |buf: &mut [u8]| {
+            std::thread::sleep(Duration::from_millis(50));
+            data_reader.read(buf)
+        };
+        let mock_io = MockIo::new(reader, writer);
+
+        // Build MockFramer
+        let mock_framer = MockFramer::new(|buf| Ok(Bytes::copy_from_slice(buf)));
+
+        // Build IoHandler and verify read is correct
+        let mut handler = SmdpIoHandler::new(mock_io, mock_framer, 200, 1024);
+        let resp = handler.poll_once();
+        assert!(resp.is_err());
+    }
+    #[test]
+    fn test_io_lower_read_error() {
+        // Create random data
+        let mut rng = thread_rng();
+        let mut data: [u8; 2048] = [0; 2048];
+        rng.fill(&mut data);
+        let mut data_reader = Cursor::new(data.clone());
+
+        // Build MockIO with a delayed sender
+        let writer = |_: &[u8]| return Ok(0usize);
+        let reader = |_: &mut [u8]| Err(std::io::Error::new(ErrorKind::TimedOut, "Timed out"));
+        let mock_io = MockIo::new(reader, writer);
+
+        // Build MockFramer
+        let mock_framer = MockFramer::new(|buf| Ok(Bytes::copy_from_slice(buf)));
+
+        // Build IoHandler and verify read is correct
+        let mut handler = SmdpIoHandler::new(mock_io, mock_framer, 200, 1024);
+        let resp = handler.poll_once();
+        assert!(resp.is_err());
     }
 }
