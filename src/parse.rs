@@ -1,53 +1,88 @@
-use crate::format::SmdpPacket;
+use crate::format::{MIN_PKT_SIZE, SmdpPacket};
 use anyhow::{Context, Result, anyhow};
-use bytes::{Buf, Bytes, BytesMut};
+use bytes::{Bytes, BytesMut};
 use std::{
     io::{Read, Write},
     time::Duration,
 };
 
+const STX: u8 = 0x02;
+const EDX: u8 = 0x1D;
+
 /// Required methods for a Framer. Primarily used for testing.
 trait Framer {
-    /// Push bytes into Framer buffer.
-    fn push_bytes(&mut self, data: &[u8]) -> FramerStatus;
-    /// Called by Reader to signal finished status.
-    fn finalize(&mut self) -> FramerStatus;
-    /// Yields next valid frame if found.
-    fn next_packet(&mut self) -> Result<Bytes>;
+    /// Push bytes into Framer buffer for framing. Syncon is request/response, so
+    /// there should only ever be one response frame per request.
+    fn push_bytes(&mut self, data: &[u8]) -> Result<Bytes>;
 }
 
 /// Feedback to Reader on the state of the
 /// Framer. Will not return partial packets since they are
 /// to be ignored in the protocol.
 enum FramerStatus {
-    PacketTooLarge,
-    PacketTooSmall,
+    FrameTooSmall,
+    MaxSizeOverflow,
     InvalidFormat,
-    Incomplete,
+    Complete,
 }
-/// Handles the framing logic for the SMDP protocol. The framer only validates
-/// the structure of a stream of bytes and extracts candidate packets, it does no parsing
+/// Handles the framing logic for the SMDP protocol. The framer validates
+/// the structure of a stream of bytes and extracts a candidate packet, it does no parsing
 /// of fields (E.g. will not verify checksum).
 struct SmdpFramer {
     // Buffer that holds incoming bytes from the reader.
     buf: BytesMut,
-    // Max size of the buffer/packet (including STX/ETX)
-    max_size: usize,
+}
+impl SmdpFramer {
+    fn new(max_size: usize) -> Self {
+        Self {
+            buf: BytesMut::with_capacity(max_size),
+        }
+    }
 }
 impl Framer for SmdpFramer {
-    fn push_bytes(&mut self, data: &[u8]) -> FramerStatus {
-        todo!()
-    }
+    fn push_bytes(&mut self, data: &[u8]) -> Result<Bytes> {
+        // Look for STX:
+        // If at least one found, set head of buf to idx
+        // of STX with the highest idx. If none found, return InvalidFormat.
+        let stx_pos = data
+            .iter()
+            .rposition(|b| *b == STX)
+            .ok_or(anyhow!("Invalid format, STX not found"))?;
 
-    fn finalize(&mut self) -> FramerStatus {
-        todo!()
-    }
+        // Look for EDX starting from idx after the stx position:
+        // If at least one found, find pos of EDX with the lowest idx. Append data from [STX, EDX].
+        // If this would cause an overflow, return MaxSizeOverflow. If none found, return InvalidFormat.
+        let edx_pos = data[stx_pos + 1..]
+            .iter()
+            .position(|b| *b == EDX)
+            .ok_or(anyhow!("Invalid format, EDX not found"))?;
 
-    fn next_packet(&mut self) -> Result<Bytes> {
-        todo!()
+        if data[stx_pos..=edx_pos].len() <= self.buf.capacity() {
+            self.buf.extend_from_slice(&data[stx_pos..=edx_pos]);
+        } else {
+            return Err(anyhow!(
+                "Frame too large, recvd {} bytes, max bytes allowed {}",
+                &data[stx_pos..=edx_pos].len(),
+                self.buf.capacity()
+            ));
+        }
+
+        // Check for min length. If too small, clear buffer and return FrameTooSmall. Otherwise
+        // return valid frame.
+        if self.buf.len() < MIN_PKT_SIZE {
+            let buf_len = self.buf.len();
+            self.buf.clear();
+            return Err(anyhow!(
+                "Frame too small, recvd {} bytes, min allowed {}",
+                buf_len,
+                MIN_PKT_SIZE
+            ));
+        } else {
+            Ok(self.buf.split_to(edx_pos + 1).freeze())
+        }
     }
 }
-/// Manages reading from a buffer, retries, timeouts, etc.
+/// Manages reading from bytes from IO and delegates protocol framing.
 struct SmdpReader<T: Read + Write, F: Framer> {
     io_handle: T,
     framer: F,
