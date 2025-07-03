@@ -4,11 +4,11 @@ use bitfield::{Bit, BitRange};
 // Since the protocol is binary transparent, STX and carriage
 // return characters are not allowed in the data field. Need escape character plus
 // a way to signal '\r' and 0x02.
-const ESCAPE_CHAR: u8 = 0x07;
-const HEX_02_ESC: u8 = 0x30; // ASCII '0'
-const HEX_0D_ESC: u8 = 0x31; // ASCII '1'
-const HEX_07_ESC: u8 = 0x32; // ASCII '2'
-const MIN_PKT_SIZE: usize = 6;
+pub(crate) const ESCAPE_CHAR: u8 = 0x07;
+pub(crate) const HEX_02_ESC: u8 = 0x30; // ASCII '0'
+pub(crate) const HEX_0D_ESC: u8 = 0x31; // ASCII '1'
+pub(crate) const HEX_07_ESC: u8 = 0x32; // ASCII '2'
+pub(crate) const MIN_PKT_SIZE: usize = 6;
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum ResponseCode {
@@ -128,32 +128,16 @@ pub struct SmdpPacket {
     checksum_2: u8,
 }
 impl SmdpPacket {
-    pub fn new(addr: u8, cmd_code: u8, data: Vec<u8>) -> Result<Self> {
-        // Input validation. Using in case slaves do not handle
-        // error handling appropriately.
-        if addr < 0x10 || addr > 0xFE {
-            return Err(anyhow!(
-                "{} is an invalid address. Valid addresses are 16 - 254",
-                addr
-            ));
-        }
-        if cmd_code < 0x01 || cmd_code > 0x0F {
-            return Err(anyhow!(
-                "{} is an invalid command code. Valid codes are 1 - 15",
-                cmd_code
-            ));
-        }
-
-        let cmd_rsp = CommandResponse(cmd_code << 4);
-        let (checksum_1, checksum_2) = Self::mod256_checksum_split(&data, addr, cmd_rsp.0);
-        Ok(Self {
+    pub fn new(addr: u8, cmd_rsp: u8, data: Vec<u8>) -> Self {
+        let (checksum_1, checksum_2) = mod256_checksum_split(&data, addr, cmd_rsp);
+        Self {
             stx: 0x02,
             addr,
-            cmd_rsp,
+            cmd_rsp: CommandResponse(cmd_rsp),
             data,
             checksum_1,
             checksum_2,
-        })
+        }
     }
     /// Serializes the packet into bytes after escaping characters in the payload.
     fn to_bytes(&self) -> Vec<u8> {
@@ -185,20 +169,21 @@ impl SmdpPacket {
         bytes.push(b'\r');
         bytes
     }
-    /// Computes the Modulo 256 checksum of the Address, Command Response, and Data fields
-    /// of the packet. Note that this should be performed BEFORE escaping!
-    fn mod256_checksum(data: &[u8], addr: u8, cmd_rsp: u8) -> u8 {
-        // `wrapping_add()` gives mod 256 behavior for u8 sums
-        let acc = addr.wrapping_add(cmd_rsp);
-        data.iter().fold(acc, |acc, el| acc.wrapping_add(*el))
-    }
-    /// Convenience function to return the split mod256 checksum (MS nibble, LS nibble) plus
-    /// offset required by the packet format.
-    fn mod256_checksum_split(data: &[u8], addr: u8, cmd_rsp: u8) -> (u8, u8) {
-        let chk = Self::mod256_checksum(data, addr, cmd_rsp);
-        (((chk & 0b11110000) >> 4) + 0x30, (chk & 0b1111) + 0x30)
-    }
 }
+/// Computes the Modulo 256 checksum of the Address, Command Response, and Data fields
+/// of the packet. Note that this should be performed BEFORE escaping!
+pub(crate) fn mod256_checksum(data: &[u8], addr: u8, cmd_rsp: u8) -> u8 {
+    // `wrapping_add()` gives mod 256 behavior for u8 sums
+    let acc = addr.wrapping_add(cmd_rsp);
+    data.iter().fold(acc, |acc, el| acc.wrapping_add(*el))
+}
+/// Convenience function to return the split mod256 checksum (MS nibble, LS nibble) plus
+/// offset required by the packet format.
+pub(crate) fn mod256_checksum_split(data: &[u8], addr: u8, cmd_rsp: u8) -> (u8, u8) {
+    let chk = mod256_checksum(data, addr, cmd_rsp);
+    (((chk & 0b11110000) >> 4) + 0x30, (chk & 0b1111) + 0x30)
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -222,26 +207,19 @@ mod test {
         assert_eq!(cmd_rsp.rspf(), false);
         assert_eq!(cmd_rsp.rsp().unwrap(), ResponseCode::ErrInhibited);
     }
-    #[test]
-    fn build_new_packet_ok() {
-        let packet = SmdpPacket::new(16, 8, vec![10, 20]);
-        assert!(packet.is_ok());
-    }
 
     #[test]
     fn extract_cmd_rsp_vals_from_packet_ok() {
-        let packet = SmdpPacket::new(16, 8, vec![10, 20]);
-        assert!(packet.is_ok());
-        let cmd_rsp = packet.unwrap().cmd_rsp;
+        let packet = SmdpPacket::new(16, 0x80, vec![10, 20]);
+        let cmd_rsp = packet.cmd_rsp;
         assert_eq!(cmd_rsp.cmd().unwrap(), CommandCode::App(8));
         assert_eq!(cmd_rsp.rspf(), false);
         assert!(cmd_rsp.rsp().is_err());
     }
     #[test]
     fn serialize_packet_no_checksum_wrap_no_escape() {
-        let packet = SmdpPacket::new(16, 8, vec![10, 20]);
-        assert!(packet.is_ok());
-        let bytes = packet.unwrap().to_bytes();
+        let packet = SmdpPacket::new(16, 0x80, vec![10, 20]);
+        let bytes = packet.to_bytes();
         let checksum = 16u8 + 128 + 30;
         let chk1 = ((checksum & 0b11110000) >> 4) + 0x30;
         let chk2 = (checksum & 0b1111) + 0x30;
@@ -252,9 +230,8 @@ mod test {
     }
     #[test]
     fn serialize_packet_with_checksum_wrap_no_escape() {
-        let packet = SmdpPacket::new(150, 8, vec![10, 20]);
-        assert!(packet.is_ok());
-        let bytes = packet.unwrap().to_bytes();
+        let packet = SmdpPacket::new(150, 0x80, vec![10, 20]);
+        let bytes = packet.to_bytes();
         let checksum = 150u8.wrapping_add(128).wrapping_add(30);
         let chk1 = ((checksum & 0b11110000) >> 4) + 0x30;
         let chk2 = (checksum & 0b1111) + 0x30;
@@ -265,9 +242,8 @@ mod test {
     }
     #[test]
     fn serialize_packet_no_checksum_wrap_with_escape() {
-        let packet = SmdpPacket::new(16, 8, vec![5, 2, 7, 13]);
-        assert!(packet.is_ok());
-        let bytes = packet.unwrap().to_bytes();
+        let packet = SmdpPacket::new(16, 0x80, vec![5, 2, 7, 13]);
+        let bytes = packet.to_bytes();
         // Checksum calculated on non-escaped data!
         let checksum = 16u8 + 128 + 27;
         let chk1 = ((checksum & 0b11110000) >> 4) + 0x30;
@@ -293,9 +269,8 @@ mod test {
     }
     #[test]
     fn serialize_packet_with_checksum_wrap_with_escape() {
-        let packet = SmdpPacket::new(150, 8, vec![5, 2, 7, 13]);
-        assert!(packet.is_ok());
-        let bytes = packet.unwrap().to_bytes();
+        let packet = SmdpPacket::new(150, 0x80, vec![5, 2, 7, 13]);
+        let bytes = packet.to_bytes();
         // Checksum calculated on non-escaped data!
         let checksum = 150u8.wrapping_add(128).wrapping_add(27);
         let chk1 = ((checksum & 0b11110000) >> 4) + 0x30;
