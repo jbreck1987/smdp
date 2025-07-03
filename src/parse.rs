@@ -241,6 +241,17 @@ mod tests {
     fn make_framer() -> SmdpFramer {
         SmdpFramer::new(1024)
     }
+    struct MockFramer<F: Fn(&[u8]) -> Result<Bytes>> {
+        f: F,
+    }
+    impl<F> Framer for MockFramer<F>
+    where
+        F: Fn(&[u8]) -> Result<Bytes>,
+    {
+        fn push_bytes(&mut self, data: &[u8]) -> Result<Bytes> {
+            (self.f)(data)
+        }
+    }
     // Used for testing the IoHandler functionality in generality.
     // Can simulate any network condition via passed in closures/functions.
     struct MockIo<R, W>
