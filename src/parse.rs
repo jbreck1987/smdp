@@ -23,7 +23,6 @@ enum FramerStatus {
     FrameTooSmall,
     MaxSizeOverflow,
     InvalidFormat,
-    Complete,
 }
 /// Handles the framing logic for the SMDP protocol. The framer validates
 /// the structure of a stream of bytes and extracts a candidate packet, it does no parsing
@@ -41,9 +40,12 @@ impl SmdpFramer {
 }
 impl Framer for SmdpFramer {
     fn push_bytes(&mut self, data: &[u8]) -> Result<Bytes> {
+        if data.len() == 0 {
+            return Err(anyhow!("No bytes read"));
+        }
         // Look for STX:
-        // If at least one found, set head of buf to idx
-        // of STX with the highest idx. If none found, return InvalidFormat.
+        // If at least one found, find pos of STX with the highest idx.
+        // If none found, return InvalidFormat.
         let stx_pos = data
             .iter()
             .rposition(|b| *b == STX)
@@ -55,7 +57,10 @@ impl Framer for SmdpFramer {
         let edx_pos = data[stx_pos + 1..]
             .iter()
             .position(|b| *b == EDX)
-            .ok_or(anyhow!("Invalid format, EDX not found"))?;
+            .ok_or(anyhow!("Invalid format, EDX not found"))?
+            + (stx_pos + 1);
+        eprintln!("stx_pos: {}", stx_pos);
+        eprintln!("edx_pos: {}", edx_pos);
 
         if data[stx_pos..=edx_pos].len() <= self.buf.capacity() {
             self.buf.extend_from_slice(&data[stx_pos..=edx_pos]);
@@ -78,12 +83,15 @@ impl Framer for SmdpFramer {
                 MIN_PKT_SIZE
             ));
         } else {
-            Ok(self.buf.split_to(edx_pos + 1).freeze())
+            eprintln!("buf_len: {}", self.buf.len());
+            Ok(self.buf.split().freeze())
         }
     }
 }
-/// Manages reading from bytes from IO and delegates protocol framing.
-struct SmdpReader<T: Read + Write, F: Framer> {
+
+/// Manages reading/writing bytes to/from IO and delegate reads to protocol framer.
+/// Only uses the basic Read/Write API, customization is up to the caller.
+struct SmdpIoHandler<T: Read + Write, F: Framer> {
     io_handle: T,
     framer: F,
     // Number of read retries if framer signals an intermediate state.
@@ -95,7 +103,7 @@ struct SmdpReader<T: Read + Write, F: Framer> {
     // Read buffer
     read_buf: Vec<u8>,
 }
-impl<T, F> SmdpReader<T, F>
+impl<T, F> SmdpIoHandler<T, F>
 where
     T: Read + Write,
     F: Framer,
@@ -119,7 +127,7 @@ where
 
 /// Packages all the individual components to go from the wire to serialized SmdpPacket.
 pub struct SmpdProtocol<T: Read + Write> {
-    reader: SmdpReader<T, SmdpFramer>,
+    reader: SmdpIoHandler<T, SmdpFramer>,
 }
 impl<T> SmpdProtocol<T>
 where
@@ -145,5 +153,77 @@ where
         // Verify checksum
         // Deserialize into packet struct
         todo!()
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const STX: u8 = 0x02;
+    const EDX: u8 = 0x1D;
+
+    fn make_framer() -> SmdpFramer {
+        SmdpFramer::new(1024)
+    }
+
+    #[test]
+    fn test_one_stx_one_edx() {
+        let mut framer = make_framer();
+        let data = vec![STX, 0x10, 0x20, 0x30, 0x40, 0x50, EDX];
+        let frame = framer.push_bytes(&data).unwrap();
+        assert_eq!(
+            frame,
+            Bytes::from(vec![STX, 0x10, 0x20, 0x30, 0x40, 0x50, EDX])
+        );
+    }
+
+    #[test]
+    fn test_multiple_stx_one_edx() {
+        let mut framer = make_framer();
+        let data = vec![EDX, EDX, 0x09, STX, STX, 0x10, 0x20, 0x30, 0x40, 0x50, EDX];
+        let frame = framer.push_bytes(&data).unwrap();
+        // Should start from the last STX
+        assert_eq!(
+            frame,
+            Bytes::from(vec![STX, 0x10, 0x20, 0x30, 0x40, 0x50, EDX])
+        );
+    }
+
+    #[test]
+    fn test_multiple_stx_multiple_edx() {
+        let mut framer = make_framer();
+        let data = vec![STX, STX, 0x10, 0x20, 0x30, 0x40, 0x50, EDX, 0x60, EDX];
+        let frame = framer.push_bytes(&data).unwrap();
+        // Should start from the last STX and end at the first EDX after it
+        assert_eq!(
+            frame,
+            Bytes::from(vec![STX, 0x10, 0x20, 0x30, 0x40, 0x50, EDX])
+        );
+    }
+
+    #[test]
+    fn test_multiple_stx_separated_one_edx() {
+        let mut framer = make_framer();
+        let data = vec![STX, 0x01, 0x02, STX, 0x10, 0x20, 0x30, 0x40, 0x50, EDX];
+        let frame = framer.push_bytes(&data).unwrap();
+        // Should start from the last STX
+        assert_eq!(
+            frame,
+            Bytes::from(vec![STX, 0x10, 0x20, 0x30, 0x40, 0x50, EDX])
+        );
+    }
+
+    #[test]
+    fn test_multiple_stx_separated_multiple_edx() {
+        let mut framer = make_framer();
+        let data = vec![
+            EDX, STX, 0x01, 0x02, STX, 0x10, 0x19, 0x45, 0x20, 0x30, 0x40, 0x50, EDX, 0x60, EDX,
+        ];
+        let frame = framer.push_bytes(&data).unwrap();
+        // Should start from the last STX and end at the first EDX after it
+        assert_eq!(
+            frame,
+            Bytes::from(vec![STX, 0x10, 0x19, 0x45, 0x20, 0x30, 0x40, 0x50, EDX])
+        );
     }
 }
