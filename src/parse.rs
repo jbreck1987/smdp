@@ -138,7 +138,7 @@ where
                     }
                 }
                 // Chunk read blocked, continue to next chunk read
-                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => continue,
+                Err(ref e) if e.kind() == ErrorKind::WouldBlock => continue,
                 Err(e) => {
                     self.chunk.clear();
                     return Err(anyhow!(e));
@@ -188,26 +188,42 @@ where
 mod tests {
     use super::*;
 
-    const STX: u8 = 0x02;
-    const EDX: u8 = 0x1D;
     // Used for testing the Framer functionality
     fn make_framer() -> SmdpFramer {
         SmdpFramer::new(1024)
     }
     // Used for testing the IoHandler functionality in generality.
-    // Can simulate any network condition via passed in closure/function.
-    struct MockReader<F: Fn(&mut [u8]) -> std::io::Result<usize>> {
-        f: F,
-    }
-    impl<F> Read for MockReader<F>
+    // Can simulate any network condition via passed in closures/functions.
+    struct MockIo<R, W>
     where
-        F: Fn(&mut [u8]) -> std::io::Result<usize>,
+        R: Fn(&mut [u8]) -> std::io::Result<usize>,
+        W: Fn(&[u8]) -> std::io::Result<usize>,
+    {
+        r: R,
+        w: W,
+    }
+    impl<R, W> Read for MockIo<R, W>
+    where
+        R: Fn(&mut [u8]) -> std::io::Result<usize>,
+        W: Fn(&[u8]) -> std::io::Result<usize>,
     {
         fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-            (self.f)(buf)
+            (self.r)(buf)
         }
     }
+    impl<R, W> Write for MockIo<R, W>
+    where
+        R: Fn(&mut [u8]) -> std::io::Result<usize>,
+        W: Fn(&[u8]) -> std::io::Result<usize>,
+    {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            (self.w)(buf)
+        }
 
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
     #[test]
     fn test_one_stx_one_edx() {
         let mut framer = make_framer();
