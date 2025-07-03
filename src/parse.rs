@@ -113,14 +113,14 @@ where
             io_handle,
             framer,
             read_timeout_ms: Duration::from_millis(read_timeout_ms as u64),
-            read_buf: Vec::with_capacity(max_frame_size),
+            read_buf: vec![0; max_frame_size],
             chunk: [0; READ_CHUNK_SIZE],
         }
     }
     // Attempts to read and frame bytes after a request for one
     // candidate SMDP packet.
     fn poll_once(&mut self) -> Result<Bytes> {
-        self.read_buf.clear();
+        self.read_buf.fill(0);
         let timer = Instant::now();
         let mut total_bytes_read = 0usize;
 
@@ -137,6 +137,7 @@ where
                         buf_slice.copy_from_slice(&self.chunk[..n_read]);
                         total_bytes_read += n_read;
                     } else {
+                        eprintln!("{}", total_bytes_read + n_read);
                         self.chunk.fill(0);
                         return Err(anyhow!("Max frame size reached."));
                     }
@@ -154,7 +155,7 @@ where
             }
         }
         // Attempt to frame read bytes
-        self.framer.push_bytes(&self.read_buf)
+        self.framer.push_bytes(&self.read_buf[..total_bytes_read])
     }
 }
 
@@ -236,6 +237,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rand::{Rng, thread_rng};
+    use std::io::Cursor;
 
     // Used for testing the Framer functionality
     fn make_framer() -> SmdpFramer {
@@ -243,6 +246,14 @@ mod tests {
     }
     struct MockFramer<F: Fn(&[u8]) -> Result<Bytes>> {
         f: F,
+    }
+    impl<F> MockFramer<F>
+    where
+        F: Fn(&[u8]) -> Result<Bytes>,
+    {
+        fn new(f: F) -> Self {
+            Self { f }
+        }
     }
     impl<F> Framer for MockFramer<F>
     where
@@ -256,15 +267,24 @@ mod tests {
     // Can simulate any network condition via passed in closures/functions.
     struct MockIo<R, W>
     where
-        R: Fn(&mut [u8]) -> std::io::Result<usize>,
+        R: FnMut(&mut [u8]) -> std::io::Result<usize>,
         W: Fn(&[u8]) -> std::io::Result<usize>,
     {
         r: R,
         w: W,
     }
+    impl<R, W> MockIo<R, W>
+    where
+        R: FnMut(&mut [u8]) -> std::io::Result<usize>,
+        W: Fn(&[u8]) -> std::io::Result<usize>,
+    {
+        fn new(r: R, w: W) -> Self {
+            Self { r, w }
+        }
+    }
     impl<R, W> Read for MockIo<R, W>
     where
-        R: Fn(&mut [u8]) -> std::io::Result<usize>,
+        R: FnMut(&mut [u8]) -> std::io::Result<usize>,
         W: Fn(&[u8]) -> std::io::Result<usize>,
     {
         fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
@@ -273,7 +293,7 @@ mod tests {
     }
     impl<R, W> Write for MockIo<R, W>
     where
-        R: Fn(&mut [u8]) -> std::io::Result<usize>,
+        R: FnMut(&mut [u8]) -> std::io::Result<usize>,
         W: Fn(&[u8]) -> std::io::Result<usize>,
     {
         fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
@@ -284,6 +304,7 @@ mod tests {
             Ok(())
         }
     }
+    /* FRAMER TESTING */
     #[test]
     fn test_one_stx_one_edx() {
         let mut framer = make_framer();
@@ -343,5 +364,28 @@ mod tests {
             frame,
             Bytes::from(vec![STX, 0x10, 0x19, 0x45, 0x20, 0x30, 0x40, 0x50, EDX])
         );
+    }
+    /* IOHANDLER TESTING */
+    #[test]
+    fn test_io_read_bytes_no_delay() {
+        // Create random data
+        let mut rng = thread_rng();
+        let mut data: [u8; 1024] = [0; 1024];
+        rng.fill(&mut data);
+        let mut data_reader = Cursor::new(data.clone());
+
+        // Build MockIO
+        let writer = |_: &[u8]| return Ok(0usize);
+        let reader = |buf: &mut [u8]| data_reader.read(buf);
+        let mock_io = MockIo::new(reader, writer);
+
+        // Build MockFramer
+        let mock_framer = MockFramer::new(|buf| Ok(Bytes::copy_from_slice(buf)));
+
+        // Build IoHandler and verify read is correct
+        let mut handler = SmdpIoHandler::new(mock_io, mock_framer, 200, 2048);
+        let resp = handler.poll_once();
+        assert!(resp.is_ok());
+        assert_eq!(resp.unwrap(), Bytes::copy_from_slice(&data));
     }
 }

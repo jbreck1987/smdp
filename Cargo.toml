@@ -3,6 +3,9 @@ name = "smdp"
 version = "0.1.0"
 edition = "2024"
 
+[dev-dependencies]
+rand = "0.8"
+
 [dependencies]
 anyhow = "1.0.98"
 bitfield = "0.19.1"
