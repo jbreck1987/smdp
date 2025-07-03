@@ -11,6 +11,7 @@ use std::{
 
 const STX: u8 = 0x02;
 const EDX: u8 = 0x1D;
+const READ_CHUNK_SIZE: usize = 512;
 
 /// Required methods for a Framer. Primarily used for testing.
 trait Framer {
@@ -96,25 +97,25 @@ struct SmdpIoHandler<T: Read + Write, F: Framer> {
     io_handle: T,
     framer: F,
     // Timeout for one read operation in milliseconds.
-    read_timeout: Duration,
+    read_timeout_ms: Duration,
     // Read buffer
     read_buf: Vec<u8>,
     // Chunk buffer
-    chunk: Vec<u8>,
+    chunk: [u8; READ_CHUNK_SIZE],
 }
 impl<T, F> SmdpIoHandler<T, F>
 where
     T: Read + Write,
     F: Framer,
 {
-    fn new(
-        io_handle: T,
-        framer: F,
-        read_timeout: usize,
-        read_chunk_size: usize,
-        max_frame_size: usize,
-    ) -> Self {
-        todo!()
+    fn new(io_handle: T, framer: F, read_timeout_ms: usize, max_frame_size: usize) -> Self {
+        Self {
+            io_handle,
+            framer,
+            read_timeout_ms: Duration::from_millis(read_timeout_ms as u64),
+            read_buf: Vec::with_capacity(max_frame_size),
+            chunk: [0; READ_CHUNK_SIZE],
+        }
     }
     // Attempts to read and frame bytes after a request for one
     // candidate SMDP packet.
@@ -136,19 +137,19 @@ where
                         buf_slice.copy_from_slice(&self.chunk[..n_read]);
                         total_bytes_read += n_read;
                     } else {
-                        self.chunk.clear();
+                        self.chunk.fill(0);
                         return Err(anyhow!("Max frame size reached."));
                     }
                 }
                 // Chunk read blocked, continue to next chunk read
                 Err(ref e) if e.kind() == ErrorKind::WouldBlock => continue,
                 Err(e) => {
-                    self.chunk.clear();
+                    self.chunk.fill(0);
                     return Err(anyhow!(e));
                 }
             }
             // Check timer
-            if timer.elapsed() >= self.read_timeout {
+            if timer.elapsed() >= self.read_timeout_ms {
                 break;
             }
         }
@@ -165,18 +166,15 @@ impl<T> SmpdProtocol<T>
 where
     T: Read + Write,
 {
-    fn new(
-        io_handle: T,
-        read_timeout: usize,
-        num_retries: usize,
-        read_chunk_size: usize,
-        max_frame_size: usize,
-    ) -> Self {
-        todo!()
+    fn new(io_handle: T, read_timeout_ms: usize, max_frame_size: usize) -> Self {
+        let framer = SmdpFramer::new(max_frame_size);
+        let reader = SmdpIoHandler::new(io_handle, framer, read_timeout_ms, max_frame_size);
+        Self { reader }
     }
     /// Attempts to read one SMDP packet from the wire after a request.
     pub fn poll_once(&mut self) -> Result<SmdpPacket> {
-        todo!()
+        let mut frame = self.reader.poll_once()?;
+        Self::parse_frame(&mut frame)
     }
     /// Parses a candidate frame (minus) into a well-formed SMDP packet if valid. Currently supports
     /// only V2 and below.
