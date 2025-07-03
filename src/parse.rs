@@ -2,8 +2,8 @@ use crate::format::{MIN_PKT_SIZE, SmdpPacket};
 use anyhow::{Context, Result, anyhow};
 use bytes::{Bytes, BytesMut};
 use std::{
-    io::{Read, Write},
-    time::Duration,
+    io::{ErrorKind, Read, Write},
+    time::{Duration, Instant},
 };
 
 const STX: u8 = 0x02;
@@ -59,8 +59,6 @@ impl Framer for SmdpFramer {
             .position(|b| *b == EDX)
             .ok_or(anyhow!("Invalid format, EDX not found"))?
             + (stx_pos + 1);
-        eprintln!("stx_pos: {}", stx_pos);
-        eprintln!("edx_pos: {}", edx_pos);
 
         if data[stx_pos..=edx_pos].len() <= self.buf.capacity() {
             self.buf.extend_from_slice(&data[stx_pos..=edx_pos]);
@@ -94,14 +92,12 @@ impl Framer for SmdpFramer {
 struct SmdpIoHandler<T: Read + Write, F: Framer> {
     io_handle: T,
     framer: F,
-    // Number of read retries if framer signals an intermediate state.
-    retries: usize,
-    // Timeout for one read operation
+    // Timeout for one read operation in milliseconds.
     read_timeout: Duration,
-    // Size of read chunk when iterating over input buffer.
-    read_chunk_size: usize,
     // Read buffer
     read_buf: Vec<u8>,
+    // Chunk buffer
+    chunk: Vec<u8>,
 }
 impl<T, F> SmdpIoHandler<T, F>
 where
@@ -112,7 +108,6 @@ where
         io_handle: T,
         framer: F,
         read_timeout: usize,
-        num_retries: usize,
         read_chunk_size: usize,
         max_frame_size: usize,
     ) -> Self {
@@ -121,7 +116,41 @@ where
     // Attempts to read and frame bytes after a request for one
     // candidate SMDP packet.
     fn poll_once(&mut self) -> Result<Bytes> {
-        todo!()
+        self.read_buf.clear();
+        let timer = Instant::now();
+        let mut total_bytes_read = 0usize;
+
+        // Canonical chunked read loop
+        loop {
+            match self.io_handle.read(&mut self.chunk) {
+                // EOF reached
+                Ok(0) => break,
+                Ok(n_read) => {
+                    if let Some(buf_slice) = self
+                        .read_buf
+                        .get_mut(total_bytes_read..total_bytes_read + n_read)
+                    {
+                        buf_slice.copy_from_slice(&self.chunk[..n_read]);
+                        total_bytes_read += n_read;
+                    } else {
+                        self.chunk.clear();
+                        return Err(anyhow!("Max frame size reached."));
+                    }
+                }
+                // Chunk read blocked, continue to next chunk read
+                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => continue,
+                Err(e) => {
+                    self.chunk.clear();
+                    return Err(anyhow!(e));
+                }
+            }
+            // Check timer
+            if timer.elapsed() >= self.read_timeout {
+                break;
+            }
+        }
+        // Attempt to frame read bytes
+        self.framer.push_bytes(&self.read_buf)
     }
 }
 
