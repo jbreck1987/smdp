@@ -477,4 +477,29 @@ mod tests {
         let resp = handler.poll_once();
         assert!(resp.is_err());
     }
+    #[test]
+    fn test_io_read_timeout() {
+        // Create random data
+        let mut rng = thread_rng();
+        let mut data: [u8; 1024] = [0; 1024];
+        rng.fill(&mut data);
+        let mut data_reader = Cursor::new(data.clone());
+
+        // Build MockIO with a delayed sender
+        let writer = |_: &[u8]| return Ok(0usize);
+        let reader = |buf: &mut [u8]| {
+            std::thread::sleep(Duration::from_millis(200));
+            data_reader.read(buf)
+        };
+        let mock_io = MockIo::new(reader, writer);
+
+        // Build MockFramer
+        let mock_framer = MockFramer::new(|buf| Ok(Bytes::copy_from_slice(buf)));
+
+        // Build IoHandler and verify read is correct
+        let mut handler = SmdpIoHandler::new(mock_io, mock_framer, 200, 1024);
+        let resp = handler.poll_once();
+        assert!(resp.is_ok());
+        assert_ne!(resp.unwrap(), Bytes::copy_from_slice(&data));
+    }
 }
