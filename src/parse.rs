@@ -190,9 +190,22 @@ mod tests {
 
     const STX: u8 = 0x02;
     const EDX: u8 = 0x1D;
-
+    // Used for testing the Framer functionality
     fn make_framer() -> SmdpFramer {
         SmdpFramer::new(1024)
+    }
+    // Used for testing the IoHandler functionality in generality.
+    // Can simulate any network condition via passed in closure/function.
+    struct MockReader<F: Fn(&mut [u8]) -> std::io::Result<usize>> {
+        f: F,
+    }
+    impl<F> Read for MockReader<F>
+    where
+        F: Fn(&mut [u8]) -> std::io::Result<usize>,
+    {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            (self.f)(buf)
+        }
     }
 
     #[test]
