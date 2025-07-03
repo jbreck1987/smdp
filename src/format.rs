@@ -1,6 +1,5 @@
 use anyhow::{Error, Result, anyhow};
 use bitfield::{Bit, BitRange};
-use bytes::Bytes;
 
 // Since the protocol is binary transparent, STX and carriage
 // return characters are not allowed in the data field. Need escape character plus
@@ -196,8 +195,8 @@ impl SmdpPacket {
     /// Convenience function to return the split mod256 checksum (MS nibble, LS nibble) plus
     /// offset required by the packet format.
     fn mod256_checksum_split(data: &[u8], addr: u8, cmd_rsp: u8) -> (u8, u8) {
-        let acc = Self::mod256_checksum(data, addr, cmd_rsp);
-        (((acc & 0b11110000) >> 4) + 0x30, (acc & 0b1111) + 0x30)
+        let chk = Self::mod256_checksum(data, addr, cmd_rsp);
+        (((chk & 0b11110000) >> 4) + 0x30, (chk & 0b1111) + 0x30)
     }
 }
 #[cfg(test)]
