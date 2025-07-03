@@ -104,6 +104,7 @@ where
         io_handle: T,
         framer: F,
         read_timeout: usize,
+        num_retries: usize,
         read_chunk_size: usize,
         max_frame_size: usize,
     ) -> Self {
@@ -124,16 +125,25 @@ impl<T> SmpdProtocol<T>
 where
     T: Read + Write,
 {
+    fn new(
+        io_handle: T,
+        read_timeout: usize,
+        num_retries: usize,
+        read_chunk_size: usize,
+        max_frame_size: usize,
+    ) -> Self {
+        todo!()
+    }
+    /// Attempts to read one SMDP packet from the wire after a request.
+    pub fn poll_once(&mut self) -> Result<SmdpPacket> {
+        todo!()
+    }
     fn parse_frame(&mut self, frame: Bytes) -> Result<SmdpPacket> {
         // Verify Address is in-range
         // Verify fields of CMD_RSP byte are valid
         // Unescape Data field
         // Verify checksum
         // Deserialize into packet struct
-        todo!()
-    }
-    /// Tries to read one SMDP packet from the wire after a request.
-    pub fn poll_once(&mut self) -> Result<SmdpPacket> {
         todo!()
     }
 }
