@@ -85,7 +85,6 @@ impl Framer for SmdpFramer {
                 MIN_PKT_SIZE
             ));
         } else {
-            eprintln!("buf_len: {}", self.buf.len());
             Ok(self.buf.split().freeze())
         }
     }
