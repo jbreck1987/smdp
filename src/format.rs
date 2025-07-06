@@ -14,23 +14,22 @@ pub(crate) const MIN_PKT_SIZE: usize = 6;
 
 // Traits used to handle packet format versioning
 pub trait SerizalizePacket {
-    type Error;
+    type SerializerError;
     type Item;
 
-    fn to_bytes_into(&self, buf: &mut impl Write) -> Result<(), Self::Error>;
+    fn to_bytes_into(&self, buf: &mut impl Write) -> Result<(), Self::SerializerError>;
 
     /// Optional, default convenience method returning owned buffer
-    fn to_bytes_vec(&self) -> Result<Vec<u8>, Self::Error> {
+    fn to_bytes_vec(&self) -> Result<Vec<u8>, Self::SerializerError> {
         let mut ret: Vec<u8> = Vec::with_capacity(64);
         self.to_bytes_into(&mut ret)?;
         Ok(ret)
     }
 }
-pub trait DeserializePacket {
-    type Error;
-    type Item;
+pub trait DeserializePacket: Sized {
+    type DeserializerError;
 
-    fn from_bytes(buf: &[u8]) -> Result<Self::Item, Self::Error>;
+    fn from_bytes(buf: &[u8]) -> Result<Self, Self::DeserializerError>;
 }
 /// Convenience marker trait with blanket implementation
 /// coupling SerizalizePacket and DeserializePacket
@@ -170,10 +169,10 @@ impl SmdpPacket {
     }
 }
 impl SerizalizePacket for SmdpPacket {
-    type Error = Error;
+    type SerializerError = Error;
     type Item = Self;
     /// Serializes the packet into bytes after escaping characters in the payload.
-    fn to_bytes_into(&self, buf: &mut impl std::io::Write) -> Result<(), Self::Error> {
+    fn to_bytes_into(&self, buf: &mut impl std::io::Write) -> Result<(), Self::SerializerError> {
         // Write STX and "header" fields
         buf.write_all(&[self.stx, self.addr, self.cmd_rsp.0])?;
 
@@ -200,10 +199,9 @@ impl SerizalizePacket for SmdpPacket {
     }
 }
 impl DeserializePacket for SmdpPacket {
-    type Error = Error;
-    type Item = Self;
+    type DeserializerError = Error;
 
-    fn from_bytes(buf: &[u8]) -> Result<Self::Item, Self::Error> {
+    fn from_bytes(buf: &[u8]) -> Result<Self, Self::DeserializerError> {
         let mut buf = BytesMut::from(buf);
         // Discard STX
         _ = buf.try_get_u8().map_err(|_| anyhow!("buf is empty"));
