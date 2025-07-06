@@ -1,5 +1,6 @@
 use anyhow::{Error, Result, anyhow};
 use bitfield::{Bit, BitRange};
+use bytes::{Buf, BytesMut};
 use std::io::Write;
 
 // Since the protocol is binary transparent, STX and carriage
@@ -194,6 +195,66 @@ impl SerizalizePacket for SmdpPacket {
         // Write "Footer" fields and EDX
         buf.write_all(&[self.checksum_1, self.checksum_2, b'\r'])?;
         Ok(())
+    }
+}
+impl DeserializePacket for SmdpPacket {
+    type Error = Error;
+    type Item = Self;
+
+    fn from_bytes(buf: &[u8]) -> Result<Self::Item, Self::Error> {
+        let mut buf = BytesMut::from(buf);
+        // Discard STX
+        _ = buf.try_get_u8().map_err(|_| anyhow!("buf is empty"));
+
+        // Verify Address is in-range
+        let addr = buf.try_get_u8().map_err(|_| anyhow!("buf too small"))?;
+        if addr < 0x10 || addr > 0xFE {
+            return Err(anyhow!(
+                "{} is an invalid address. Valid addresses are 16 - 254",
+                addr
+            ));
+        }
+        // Verify fields of CMD_RSP byte are valid
+        let cmd_rsp = buf.try_get_u8().map_err(|_| anyhow!("buf too small"))?;
+        let cmd: u8 = cmd_rsp.bit_range(7, 4);
+        if cmd < 0x01 || cmd > 0x0E {
+            return Err(anyhow!("CMD field invalid"));
+        }
+        // No need to check RSPF bit, either 0 or 1 is valid.
+        let rsp: u8 = cmd_rsp.bit_range(2, 0);
+        if rsp < 0x01 || rsp > 0x07 {
+            return Err(anyhow!("RSP field invalid"));
+        }
+        // Unescape Data field
+        let mut data: Vec<u8> = Vec::with_capacity(buf.remaining() - 2);
+        let mut escaped = false;
+        while buf.remaining() > 3 {
+            // 3 => two checksum bytes + EDX
+            let mut curr_byte = buf.get_u8();
+            if escaped {
+                curr_byte = match curr_byte {
+                    HEX_02_ESC => 0x02,
+                    HEX_07_ESC => 0x07,
+                    HEX_0D_ESC => 0x0D,
+                    other => return Err(anyhow!("Invalid escaped value: {other}")),
+                };
+                escaped = false;
+            }
+            if !escaped && curr_byte == ESCAPE_CHAR {
+                escaped = true;
+                continue;
+            }
+            data.push(curr_byte);
+        }
+        // Verify checksum. Should be exactly 3 bytes remaining.
+        let calculated_chk = mod256_checksum(&data, addr, cmd_rsp);
+        let framed_chk = (buf.get_u8() << 4) | (buf.get_u8() & 0b00001111);
+        if calculated_chk != framed_chk {
+            return Err(anyhow!("Checksum mismatch."));
+        }
+
+        // Deserialize into packet struct
+        Ok(SmdpPacket::new(addr, cmd_rsp, data))
     }
 }
 

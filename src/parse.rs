@@ -1,5 +1,6 @@
 use crate::format::{
-    ESCAPE_CHAR, HEX_0D_ESC, HEX_02_ESC, HEX_07_ESC, MIN_PKT_SIZE, SmdpPacket, mod256_checksum,
+    DeserializePacket, ESCAPE_CHAR, HEX_0D_ESC, HEX_02_ESC, HEX_07_ESC, MIN_PKT_SIZE, SmdpPacket,
+    mod256_checksum,
 };
 use anyhow::{Context, Result, anyhow};
 use bitfield::{Bit, BitRange};
@@ -171,63 +172,7 @@ where
     /// Attempts to read one SMDP packet from the wire after a request.
     pub fn poll_once(&mut self) -> Result<SmdpPacket> {
         let mut frame = self.reader.poll_once()?;
-        Self::parse_frame(&mut frame)
-    }
-    /// Parses a candidate frame (minus) into a well-formed SMDP packet if valid. Currently supports
-    /// only V2 and below.
-    fn parse_frame(frame: &mut Bytes) -> Result<SmdpPacket> {
-        // Discard STX
-        _ = frame.try_get_u8().map_err(|_| anyhow!("Frame is empty"));
-
-        // Verify Address is in-range
-        let addr = frame.try_get_u8().map_err(|_| anyhow!("Frame too small"))?;
-        if addr < 0x10 || addr > 0xFE {
-            return Err(anyhow!(
-                "{} is an invalid address. Valid addresses are 16 - 254",
-                addr
-            ));
-        }
-        // Verify fields of CMD_RSP byte are valid
-        let cmd_rsp = frame.try_get_u8().map_err(|_| anyhow!("Frame too small"))?;
-        let cmd: u8 = cmd_rsp.bit_range(7, 4);
-        if cmd < 0x01 || cmd > 0xFE {
-            return Err(anyhow!("CMD field invalid"));
-        }
-        // No need to check RSPF bit, either 0 or 1 is valid.
-        let rsp: u8 = cmd_rsp.bit_range(2, 0);
-        if rsp < 0x01 || rsp > 0x07 {
-            return Err(anyhow!("RSP field invalid"));
-        }
-        // Unescape Data field
-        let mut data: Vec<u8> = Vec::with_capacity(frame.remaining() - 2);
-        let mut escaped = false;
-        while frame.remaining() > 3 {
-            // 3 => two checksum bytes + EDX
-            let mut curr_byte = frame.get_u8();
-            if escaped {
-                curr_byte = match curr_byte {
-                    HEX_02_ESC => 0x02,
-                    HEX_07_ESC => 0x07,
-                    HEX_0D_ESC => 0x0D,
-                    other => return Err(anyhow!("Invalid escaped value: {other}")),
-                };
-                escaped = false;
-            }
-            if !escaped && curr_byte == ESCAPE_CHAR {
-                escaped = true;
-                continue;
-            }
-            data.push(curr_byte);
-        }
-        // Verify checksum. Should be exactly 3 bytes remaining.
-        let calculated_chk = mod256_checksum(&data, addr, cmd_rsp);
-        let framed_chk = (frame.get_u8() << 4) | (frame.get_u8() & 0b00001111);
-        if calculated_chk != framed_chk {
-            return Err(anyhow!("Checksum mismatch."));
-        }
-
-        // Deserialize into packet struct
-        Ok(SmdpPacket::new(addr, cmd_rsp, data))
+        SmdpPacket::from_bytes(frame.as_ref())
     }
 }
 #[cfg(test)]
