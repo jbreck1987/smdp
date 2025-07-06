@@ -11,11 +11,12 @@ pub(crate) const HEX_02_ESC: u8 = 0x30; // ASCII '0'
 pub(crate) const HEX_0D_ESC: u8 = 0x31; // ASCII '1'
 pub(crate) const HEX_07_ESC: u8 = 0x32; // ASCII '2'
 pub(crate) const MIN_PKT_SIZE: usize = 6;
+pub(crate) const STX: u8 = 0x02;
+pub(crate) const EDX: u8 = 0x1D;
 
 // Traits used to handle packet format versioning
 pub trait SerizalizePacket {
     type SerializerError;
-    type Item;
 
     fn to_bytes_into(&self, buf: &mut impl Write) -> Result<(), Self::SerializerError>;
 
@@ -170,13 +171,12 @@ impl SmdpPacket {
 }
 impl SerizalizePacket for SmdpPacket {
     type SerializerError = Error;
-    type Item = Self;
     /// Serializes the packet into bytes after escaping characters in the payload.
     fn to_bytes_into(&self, buf: &mut impl std::io::Write) -> Result<(), Self::SerializerError> {
         // Write STX and "header" fields
         buf.write_all(&[self.stx, self.addr, self.cmd_rsp.0])?;
 
-        // Walk data and escape characters as necessary.
+        // Walk data and escape characters as necessary before writing.
         for b in self.data.iter() {
             match b {
                 0x02 => {
@@ -194,7 +194,7 @@ impl SerizalizePacket for SmdpPacket {
             }
         }
         // Write "Footer" fields and EDX
-        buf.write_all(&[self.checksum_1, self.checksum_2, b'\r'])?;
+        buf.write_all(&[self.checksum_1, self.checksum_2, EDX])?;
         Ok(())
     }
 }

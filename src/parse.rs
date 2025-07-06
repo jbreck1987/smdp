@@ -1,6 +1,6 @@
 use crate::format::{
-    DeserializePacket, ESCAPE_CHAR, HEX_0D_ESC, HEX_02_ESC, HEX_07_ESC, MIN_PKT_SIZE, PacketFormat,
-    SmdpPacket, mod256_checksum,
+    DeserializePacket, EDX, ESCAPE_CHAR, HEX_0D_ESC, HEX_02_ESC, HEX_07_ESC, MIN_PKT_SIZE,
+    PacketFormat, STX, SmdpPacket, mod256_checksum,
 };
 use anyhow::{Context, Error, Result, anyhow};
 use bitfield::{Bit, BitRange};
@@ -10,8 +10,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-const STX: u8 = 0x02;
-const EDX: u8 = 0x1D;
 const READ_CHUNK_SIZE: usize = 512;
 
 /// Required methods for a Framer. Primarily used for testing.
@@ -154,6 +152,7 @@ where
         // Attempt to frame bytes that were read
         self.framer.push_bytes(&self.read_buf[..total_bytes_read])
     }
+    /// Delegates `write_all` functionality to inner IO handle
     fn write_all(&mut self, bytes: &[u8]) -> Result<()> {
         self.io_handle.write_all(bytes).map_err(anyhow::Error::from)
     }
@@ -179,9 +178,6 @@ where
             sent: None,
         }
     }
-    pub fn send_packet(&mut self, packet: P) -> Result<()> {
-        todo!()
-    }
 }
 impl<T, P> SmpdProtocol<T, P>
 where
@@ -194,6 +190,16 @@ where
     pub fn poll_once(&mut self) -> Result<P> {
         let frame = self.io_handler.poll_once()?;
         P::from_bytes(frame.as_ref()).map_err(Error::from)
+    }
+}
+impl<T, P> SmpdProtocol<T, P>
+where
+    T: Read + Write,
+    P: PacketFormat,
+{
+    /// Attempts to write one SMDP packet from the wire after a request.
+    pub fn write_once(&mut self, bytes: &[u8]) -> Result<()> {
+        self.io_handler.write_all(bytes)
     }
 }
 #[cfg(test)]
