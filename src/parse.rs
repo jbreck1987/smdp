@@ -1,8 +1,8 @@
 use crate::format::{
-    DeserializePacket, ESCAPE_CHAR, HEX_0D_ESC, HEX_02_ESC, HEX_07_ESC, MIN_PKT_SIZE, SmdpPacket,
-    mod256_checksum,
+    DeserializePacket, ESCAPE_CHAR, HEX_0D_ESC, HEX_02_ESC, HEX_07_ESC, MIN_PKT_SIZE, PacketFormat,
+    SmdpPacket, mod256_checksum,
 };
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Error, Result, anyhow};
 use bitfield::{Bit, BitRange};
 use bytes::{Buf, Bytes, BytesMut};
 use std::{
@@ -154,25 +154,46 @@ where
         // Attempt to frame bytes that were read
         self.framer.push_bytes(&self.read_buf[..total_bytes_read])
     }
+    fn write_all(&mut self, bytes: &[u8]) -> Result<()> {
+        self.io_handle.write_all(bytes).map_err(anyhow::Error::from)
+    }
 }
 
 /// Packages all the individual components to go from the wire to serialized SmdpPacket.
-pub struct SmpdProtocol<T: Read + Write> {
-    reader: SmdpIoHandler<T, SmdpFramer>,
+pub struct SmpdProtocol<T: Read + Write, P: PacketFormat> {
+    io_handler: SmdpIoHandler<T, SmdpFramer>,
+    /// Copy of the most recently packet frame for comparison
+    /// to return value.
+    sent: Option<P>,
 }
-impl<T> SmpdProtocol<T>
+impl<T, P> SmpdProtocol<T, P>
 where
     T: Read + Write,
+    P: PacketFormat,
 {
     fn new(io_handle: T, read_timeout_ms: usize, max_frame_size: usize) -> Self {
         let framer = SmdpFramer::new(max_frame_size);
-        let reader = SmdpIoHandler::new(io_handle, framer, read_timeout_ms, max_frame_size);
-        Self { reader }
+        let handler = SmdpIoHandler::new(io_handle, framer, read_timeout_ms, max_frame_size);
+        Self {
+            io_handler: handler,
+            sent: None,
+        }
     }
+    pub fn send_packet(&mut self, packet: P) -> Result<()> {
+        todo!()
+    }
+}
+impl<T, P> SmpdProtocol<T, P>
+where
+    T: Read + Write,
+    P: PacketFormat,
+    // This bound necessary while using Anyhow (required by Into<anyhow::Error>)
+    P::DeserializerError: std::error::Error + Send + Sync + 'static,
+{
     /// Attempts to read one SMDP packet from the wire after a request.
-    pub fn poll_once(&mut self) -> Result<SmdpPacket> {
-        let mut frame = self.reader.poll_once()?;
-        SmdpPacket::from_bytes(frame.as_ref())
+    pub fn poll_once(&mut self) -> Result<P> {
+        let frame = self.io_handler.poll_once()?;
+        P::from_bytes(frame.as_ref()).map_err(Error::from)
     }
 }
 #[cfg(test)]
