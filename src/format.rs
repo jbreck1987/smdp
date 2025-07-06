@@ -217,12 +217,12 @@ impl DeserializePacket for SmdpPacket {
         // Verify fields of CMD_RSP byte are valid
         let cmd_rsp = buf.try_get_u8().map_err(|_| anyhow!("buf too small"))?;
         let cmd: u8 = cmd_rsp.bit_range(7, 4);
-        if cmd < 0x01 || cmd > 0x0E {
+        if cmd < 0x01 || cmd > 0x0F {
             return Err(anyhow!("CMD field invalid"));
         }
         // No need to check RSPF bit, either 0 or 1 is valid.
         let rsp: u8 = cmd_rsp.bit_range(2, 0);
-        if rsp < 0x01 || rsp > 0x07 {
+        if rsp < 0x01 {
             return Err(anyhow!("RSP field invalid"));
         }
         // Unescape Data field
@@ -473,5 +473,29 @@ mod test {
         let mut ser = packet.to_bytes_vec().unwrap();
         let de = SmdpPacket::from_bytes(&mut ser).unwrap();
         assert_eq!(packet, de);
+    }
+    #[test]
+    fn test_deser_invalid_frame_rsp_0() {
+        let data = vec![0x63u8, 0x45, 0x4C, 0x00];
+        let packet = SmdpPacket::new(0x10, 0x80, data);
+        let mut ser = packet.to_bytes_vec().unwrap();
+        let de = SmdpPacket::from_bytes(&mut ser);
+        assert!(de.is_err());
+    }
+    #[test]
+    fn test_deser_invalid_frame_bad_addr_hi() {
+        let data = vec![0x63u8, 0x45, 0x4C, 0x00];
+        let packet = SmdpPacket::new(0xFF, 0x81, data);
+        let mut ser = packet.to_bytes_vec().unwrap();
+        let de = SmdpPacket::from_bytes(&mut ser);
+        assert!(de.is_err());
+    }
+    #[test]
+    fn test_deser_invalid_frame_bad_addr_lo() {
+        let data = vec![0x63u8, 0x45, 0x4C, 0x00];
+        let packet = SmdpPacket::new(0x0F, 0x81, data);
+        let mut ser = packet.to_bytes_vec().unwrap();
+        let de = SmdpPacket::from_bytes(&mut ser);
+        assert!(de.is_err());
     }
 }
