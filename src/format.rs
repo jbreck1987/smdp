@@ -10,6 +10,20 @@ pub(crate) const HEX_0D_ESC: u8 = 0x31; // ASCII '1'
 pub(crate) const HEX_07_ESC: u8 = 0x32; // ASCII '2'
 pub(crate) const MIN_PKT_SIZE: usize = 6;
 
+// Traits used to handle packet format versioning
+pub trait SerizalizePacket {
+    type Error;
+    fn to_bytes(&self, buf: &mut [u8]) -> Result<(), Self::Error>;
+}
+pub trait DeserializePacket: Sized {
+    type Error;
+    fn from_bytes(buf: &[u8]) -> Result<Self, Self::Error>;
+}
+/// Convenience marker trait with blanket implementation
+/// coupling SerizalizePacket and DeserializePacket
+pub trait PacketFormat: DeserializePacket + SerizalizePacket {}
+impl<T: SerizalizePacket + DeserializePacket> PacketFormat for T {}
+
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum ResponseCode {
     /// Command understood and executed. 0x01
