@@ -1,6 +1,5 @@
 use anyhow::{Error, Result, anyhow};
 use bitfield::{Bit, BitRange};
-use bytes::buf;
 use std::io::Write;
 
 // Since the protocol is binary transparent, STX and carriage
@@ -18,6 +17,13 @@ pub trait SerizalizePacket {
     type Item;
 
     fn to_bytes_into(&self, buf: &mut impl Write) -> Result<(), Self::Error>;
+
+    /// Optional, default convenience method returning owned buffer
+    fn to_bytes_vec(&self) -> Result<Vec<u8>, Self::Error> {
+        let mut ret: Vec<u8> = Vec::with_capacity(64);
+        self.to_bytes_into(&mut ret)?;
+        Ok(ret)
+    }
 }
 pub trait DeserializePacket {
     type Error;
@@ -238,7 +244,7 @@ mod test {
         assert!(cmd_rsp.rsp().is_err());
     }
     #[test]
-    fn serialize_packet_no_checksum_wrap_no_escape() {
+    fn serialize_packet_into_no_checksum_wrap_no_escape() {
         let packet = SmdpPacket::new(16, 0x80, vec![10, 20]);
         let mut bytes: Vec<u8> = Vec::new();
         packet.to_bytes_into(&mut bytes).unwrap();
@@ -251,7 +257,7 @@ mod test {
         );
     }
     #[test]
-    fn serialize_packet_with_checksum_wrap_no_escape() {
+    fn serialize_packet_into_with_checksum_wrap_no_escape() {
         let packet = SmdpPacket::new(150, 0x80, vec![10, 20]);
         let mut bytes: Vec<u8> = Vec::with_capacity(64);
         packet.to_bytes_into(&mut bytes).unwrap();
@@ -264,7 +270,7 @@ mod test {
         );
     }
     #[test]
-    fn serialize_packet_no_checksum_wrap_with_escape() {
+    fn serialize_packet_into_no_checksum_wrap_with_escape() {
         let packet = SmdpPacket::new(16, 0x80, vec![5, 2, 7, 13]);
         let mut bytes: Vec<u8> = Vec::with_capacity(64);
         packet.to_bytes_into(&mut bytes).unwrap();
@@ -292,10 +298,88 @@ mod test {
         );
     }
     #[test]
-    fn serialize_packet_with_checksum_wrap_with_escape() {
+    fn serialize_packet_into_with_checksum_wrap_with_escape() {
         let packet = SmdpPacket::new(150, 0x80, vec![5, 2, 7, 13]);
         let mut bytes: Vec<u8> = Vec::new();
         packet.to_bytes_into(&mut bytes).unwrap();
+        // Checksum calculated on non-escaped data!
+        let checksum = 150u8.wrapping_add(128).wrapping_add(27);
+        let chk1 = ((checksum & 0b11110000) >> 4) + 0x30;
+        let chk2 = (checksum & 0b1111) + 0x30;
+        assert_eq!(
+            vec![
+                0x02u8,
+                0x96,
+                0x80,
+                0x05,
+                ESCAPE_CHAR,
+                HEX_02_ESC,
+                ESCAPE_CHAR,
+                HEX_07_ESC,
+                ESCAPE_CHAR,
+                HEX_0D_ESC,
+                chk1,
+                chk2,
+                b'\r'
+            ],
+            bytes
+        );
+    }
+    #[test]
+    fn serialize_packet_vec_no_checksum_wrap_no_escape() {
+        let packet = SmdpPacket::new(16, 0x80, vec![10, 20]);
+        let bytes = packet.to_bytes_vec().unwrap();
+        let checksum = 16u8 + 128 + 30;
+        let chk1 = ((checksum & 0b11110000) >> 4) + 0x30;
+        let chk2 = (checksum & 0b1111) + 0x30;
+        assert_eq!(
+            vec![0x02u8, 0x10, 0x80, 0x0A, 0x14, chk1, chk2, b'\r'],
+            bytes
+        );
+    }
+    #[test]
+    fn serialize_packet_vec_with_checksum_wrap_no_escape() {
+        let packet = SmdpPacket::new(150, 0x80, vec![10, 20]);
+        let bytes = packet.to_bytes_vec().unwrap();
+        let checksum = 150u8.wrapping_add(128).wrapping_add(30);
+        let chk1 = ((checksum & 0b11110000) >> 4) + 0x30;
+        let chk2 = (checksum & 0b1111) + 0x30;
+        assert_eq!(
+            vec![0x02u8, 0x96, 0x80, 0x0A, 0x14, chk1, chk2, b'\r'],
+            bytes
+        );
+    }
+    #[test]
+    fn serialize_packet_vec_no_checksum_wrap_with_escape() {
+        let packet = SmdpPacket::new(16, 0x80, vec![5, 2, 7, 13]);
+        let bytes = packet.to_bytes_vec().unwrap();
+        // Checksum calculated on non-escaped data!
+        let checksum = 16u8 + 128 + 27;
+        let chk1 = ((checksum & 0b11110000) >> 4) + 0x30;
+        let chk2 = (checksum & 0b1111) + 0x30;
+        assert_eq!(
+            vec![
+                0x02u8,
+                0x10,
+                0x80,
+                0x05,
+                ESCAPE_CHAR,
+                HEX_02_ESC,
+                ESCAPE_CHAR,
+                HEX_07_ESC,
+                ESCAPE_CHAR,
+                HEX_0D_ESC,
+                chk1,
+                chk2,
+                b'\r'
+            ],
+            bytes
+        );
+    }
+    #[test]
+    fn serialize_packet_vec_with_checksum_wrap_with_escape() {
+        let packet = SmdpPacket::new(150, 0x80, vec![5, 2, 7, 13]);
+        let bytes = packet.to_bytes_vec().unwrap();
         // Checksum calculated on non-escaped data!
         let checksum = 150u8.wrapping_add(128).wrapping_add(27);
         let chk1 = ((checksum & 0b11110000) >> 4) + 0x30;
