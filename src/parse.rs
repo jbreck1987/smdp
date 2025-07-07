@@ -159,7 +159,7 @@ where
 }
 
 /// Packages all the individual components to go from the wire to serialized SmdpPacket.
-pub struct SmpdProtocol<T: Read + Write, P: PacketFormat> {
+pub struct SmpdProtocol<T: Read + Write, P: PacketFormat + Clone> {
     io_handler: SmdpIoHandler<T, SmdpFramer>,
     /// Copy of the most recently serialized frame for comparison
     /// to return value.
@@ -168,7 +168,7 @@ pub struct SmpdProtocol<T: Read + Write, P: PacketFormat> {
 impl<T, P> SmpdProtocol<T, P>
 where
     T: Read + Write,
-    P: PacketFormat,
+    P: PacketFormat + Clone,
 {
     pub fn new(io_handle: T, read_timeout_ms: usize, max_frame_size: usize) -> Self {
         let framer = SmdpFramer::new(max_frame_size);
@@ -182,7 +182,7 @@ where
 impl<T, P> SmpdProtocol<T, P>
 where
     T: Read + Write,
-    P: PacketFormat,
+    P: PacketFormat + Clone,
     // This bound necessary while using Anyhow (required by Into<anyhow::Error>)
     P::DeserializerError: std::error::Error + Send + Sync + 'static,
 {
@@ -195,11 +195,18 @@ where
 impl<T, P> SmpdProtocol<T, P>
 where
     T: Read + Write,
-    P: PacketFormat,
+    P: PacketFormat + Clone,
+    // This bound necessary while using Anyhow (required by Into<anyhow::Error>)
+    P::SerializerError: std::error::Error + Send + Sync + 'static,
 {
-    /// Attempts to write one SMDP packet from the wire after a request.
-    pub fn write_once(&mut self, bytes: &[u8]) -> Result<()> {
-        self.io_handler.write_all(bytes)
+    /// Attempts to write one SMDP packet to the underlying IO handle.
+    pub fn write_once(&mut self, packet: &P) -> Result<()> {
+        let bytes = packet.to_bytes_vec()?;
+        self.io_handler.write_all(bytes.as_ref())?;
+
+        // If successful write, set sent as serialized packet.
+        self.sent = Some(packet.clone());
+        Ok(())
     }
 }
 #[cfg(test)]
@@ -443,5 +450,36 @@ mod tests {
         assert_eq!(packet.cmd_rsp(), cmd_rsp);
         assert_eq!(packet.data(), data);
         assert_eq!(packet.checksum_split(), (chk1, chk2));
+    }
+
+    #[test]
+    fn test_smdp_protocol_valid_frame_write() {
+        // Build valid frame to compare against serialized packet.
+        let addr = 0x10u8;
+        let cmd_rsp = 0x81u8;
+        let data = vec![0x63u8, 0x45, 0x4C, 0x00];
+        let (chk1, chk2) = mod256_checksum_split(&data, addr, cmd_rsp);
+
+        let mut frame = vec![STX, addr, cmd_rsp];
+        frame.extend_from_slice(data.as_ref());
+        frame.extend_from_slice(&[chk1, chk2]);
+        frame.push(EDX);
+
+        // Build a packet
+        let packet = SmdpPacket::new(addr, cmd_rsp, data.clone());
+
+        // All value checking should be done in the writer, thats where the serialized bytes will
+        // end up. Reader is trivial, it's not being tested.
+        let mock_io = MockIo::new(
+            |_| Ok(0usize),
+            |buf| {
+                assert_eq!(buf, frame);
+                Ok(buf.len())
+            },
+        );
+
+        // Build SmdpProtocl and give it the mock IO
+        let mut proto: SmpdProtocol<_, SmdpPacket> = SmpdProtocol::new(mock_io, 200, 64);
+        let _ = proto.write_once(&packet);
     }
 }
