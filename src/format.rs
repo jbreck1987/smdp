@@ -1,7 +1,8 @@
-use anyhow::{Error, Result, anyhow};
+use anyhow::{Result, anyhow};
 use bitfield::{Bit, BitRange};
 use bytes::{Buf, BytesMut};
 use std::io::Write;
+use thiserror::Error;
 
 // Since the protocol is binary transparent, STX and carriage
 // return characters are not allowed in the data field. Need escape character plus
@@ -14,6 +15,22 @@ pub(crate) const HEX_07_ESC: u8 = 0x32; // ASCII '2'
 pub(crate) const MIN_PKT_SIZE: usize = 6;
 pub(crate) const STX: u8 = 0x02;
 pub(crate) const EDX: u8 = 0x0D;
+
+#[derive(Error, Debug)]
+pub enum Error {
+    #[error("Buffer too small for serialization.")]
+    BufTooSmall,
+    #[error("{recvd} is an invalid address. Valid addresses are 16 - 254")]
+    InvalidAddress { recvd: u8 },
+    #[error("CMD field invalid.")]
+    InvalidCmd,
+    #[error("RSP field invalid.")]
+    InvalidRsp,
+    #[error("Invalid escaped value: {recvd}")]
+    InvalidEscapedVal { recvd: u8 },
+    #[error("IO error: {0}")]
+    IoError(#[from] std::io::Error),
+}
 
 // Traits used to handle packet format versioning
 pub trait SerizalizePacket {
@@ -56,7 +73,7 @@ pub(crate) enum ResponseCode {
     Reserved,
 }
 impl TryFrom<u8> for ResponseCode {
-    type Error = Error;
+    type Error = anyhow::Error;
 
     fn try_from(code: u8) -> Result<Self, Self::Error> {
         let res = match code {
@@ -91,7 +108,7 @@ pub(crate) enum CommandCode {
     App(u8),
 }
 impl TryFrom<u8> for CommandCode {
-    type Error = Error;
+    type Error = anyhow::Error;
 
     fn try_from(code: u8) -> Result<Self, Self::Error> {
         let res = match code {
@@ -171,7 +188,7 @@ impl SmdpPacket {
     }
 }
 impl SerizalizePacket for SmdpPacket {
-    type SerializerError = Error;
+    type SerializerError = anyhow::Error;
     /// Serializes the packet into bytes after escaping characters in the payload.
     fn to_bytes_into(&self, buf: &mut impl std::io::Write) -> Result<(), Self::SerializerError> {
         // Write STX and "header" fields
@@ -200,7 +217,7 @@ impl SerizalizePacket for SmdpPacket {
     }
 }
 impl DeserializePacket for SmdpPacket {
-    type DeserializerError = Error;
+    type DeserializerError = anyhow::Error;
 
     fn from_bytes(buf: &[u8]) -> Result<Self, Self::DeserializerError> {
         let mut buf = BytesMut::from(buf);
