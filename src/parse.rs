@@ -1,5 +1,5 @@
 use crate::format::{EDX, MIN_PKT_SIZE, PacketFormat, STX};
-use anyhow::{Context, Error, Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 use bitfield::{Bit, BitRange};
 use bytes::{Buf, Bytes, BytesMut};
 use std::{
@@ -16,10 +16,7 @@ pub trait Framer {
     fn push_bytes(&mut self, data: &[u8]) -> Result<Bytes>;
 }
 
-/// Feedback to Reader on the state of the
-/// Framer. Will not return partial packets since they are
-/// to be ignored in the protocol.
-enum FramerStatus {
+pub(crate) enum ParseError {
     FrameTooSmall,
     MaxSizeOverflow,
     InvalidFormat,
@@ -187,7 +184,7 @@ where
     /// Attempts to read one SMDP packet from the IO handle after a request.
     pub fn poll_once(&mut self) -> Result<P> {
         let frame = self.io_handler.poll_once()?;
-        P::from_bytes(frame.as_ref()).map_err(Error::from)
+        P::from_bytes(frame.as_ref()).map_err(anyhow::Error::from)
     }
 }
 impl<T, P> SmdpProtocol<T, P>
