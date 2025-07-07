@@ -1,7 +1,4 @@
-use crate::format::{
-    DeserializePacket, EDX, ESCAPE_CHAR, HEX_0D_ESC, HEX_02_ESC, HEX_07_ESC, MIN_PKT_SIZE,
-    PacketFormat, STX, SmdpPacketV2, mod256_checksum,
-};
+use crate::format::{EDX, MIN_PKT_SIZE, PacketFormat, STX};
 use anyhow::{Context, Error, Result, anyhow};
 use bitfield::{Bit, BitRange};
 use bytes::{Buf, Bytes, BytesMut};
@@ -212,7 +209,10 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{format::mod256_checksum_split, test_utils::*};
+    use crate::{
+        format::{SmdpPacketV2, mod256_checksum_split},
+        test_utils::*,
+    };
     use rand::{Rng, thread_rng};
     use std::io::Cursor;
 
