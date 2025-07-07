@@ -60,7 +60,7 @@ pub trait PacketFormat: DeserializePacket + SerizalizePacket {}
 impl<T: SerizalizePacket + DeserializePacket> PacketFormat for T {}
 
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) enum ResponseCode {
+pub enum ResponseCode {
     /// Command understood and executed. 0x01
     Ok,
     /// Illegal command (CMD code not valid). 0x02
@@ -95,7 +95,7 @@ impl TryFrom<u8> for ResponseCode {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) enum CommandCode {
+pub enum CommandCode {
     /// Reserved for future protocol stack use. 0x01, 0x02
     Reserved,
     /// Product ID, returned as decimal string. 0x03
@@ -129,7 +129,7 @@ impl TryFrom<u8> for CommandCode {
     }
 }
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) struct CommandResponse(u8);
+struct CommandResponse(u8);
 impl CommandResponse {
     /// CMD = Command. These are the commands the master can issue to the slave. All
     /// Sycon products must respond to commands in the range of 1-7. CMDS 1-7 are
@@ -189,6 +189,30 @@ impl SmdpPacket {
             checksum_1,
             checksum_2,
         }
+    }
+    /// Getter for the Address field
+    pub fn addr(&self) -> u8 {
+        self.addr
+    }
+    /// Getter for the CMD_RSP field
+    pub fn cmd_rsp(&self) -> u8 {
+        self.cmd_rsp.0
+    }
+    /// Getter for the CMD value
+    pub fn cmd(&self) -> PacketResult<CommandCode> {
+        self.cmd_rsp.cmd()
+    }
+    /// Getter for the RSP value
+    pub fn rsp(&self) -> PacketResult<ResponseCode> {
+        self.cmd_rsp.rsp()
+    }
+    /// Getter for the data bytes
+    pub fn data(&self) -> &[u8] {
+        self.data.as_ref()
+    }
+    /// Getter for the split checksum
+    pub fn checksum_split(&self) -> (u8, u8) {
+        (self.checksum_1, self.checksum_2)
     }
 }
 impl SerizalizePacket for SmdpPacket {
