@@ -170,7 +170,7 @@ where
     T: Read + Write,
     P: PacketFormat,
 {
-    fn new(io_handle: T, read_timeout_ms: usize, max_frame_size: usize) -> Self {
+    pub fn new(io_handle: T, read_timeout_ms: usize, max_frame_size: usize) -> Self {
         let framer = SmdpFramer::new(max_frame_size);
         let handler = SmdpIoHandler::new(io_handle, framer, read_timeout_ms, max_frame_size);
         Self {
