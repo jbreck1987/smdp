@@ -13,7 +13,7 @@ use std::{
 const READ_CHUNK_SIZE: usize = 512;
 
 /// Required methods for a Framer. Primarily used for testing.
-trait Framer {
+pub trait Framer {
     /// Push bytes into Framer buffer for framing. Syncon is request/response, so
     /// there should only ever be one response frame per request.
     fn push_bytes(&mut self, data: &[u8]) -> Result<Bytes>;
@@ -30,12 +30,12 @@ enum FramerStatus {
 /// Handles the framing logic for the SMDP protocol. The framer validates
 /// the structure of a stream of bytes and extracts a candidate packet, it does no parsing
 /// of fields (E.g. will not verify checksum).
-struct SmdpFramer {
+pub(crate) struct SmdpFramer {
     // Buffer that holds incoming bytes from the reader.
     buf: BytesMut,
 }
 impl SmdpFramer {
-    fn new(max_size: usize) -> Self {
+    pub(crate) fn new(max_size: usize) -> Self {
         Self {
             buf: BytesMut::with_capacity(max_size),
         }
@@ -161,7 +161,7 @@ where
 /// Packages all the individual components to go from the wire to serialized SmdpPacket.
 pub struct SmpdProtocol<T: Read + Write, P: PacketFormat> {
     io_handler: SmdpIoHandler<T, SmdpFramer>,
-    /// Copy of the most recently packet frame for comparison
+    /// Copy of the most recently serialized frame for comparison
     /// to return value.
     sent: Option<P>,
 }
@@ -205,73 +205,10 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_utils::*;
     use rand::{Rng, thread_rng};
     use std::io::Cursor;
 
-    // Used for testing the Framer functionality
-    fn make_framer() -> SmdpFramer {
-        SmdpFramer::new(1024)
-    }
-    struct MockFramer<F: Fn(&[u8]) -> Result<Bytes>> {
-        f: F,
-    }
-    impl<F> MockFramer<F>
-    where
-        F: Fn(&[u8]) -> Result<Bytes>,
-    {
-        fn new(f: F) -> Self {
-            Self { f }
-        }
-    }
-    impl<F> Framer for MockFramer<F>
-    where
-        F: Fn(&[u8]) -> Result<Bytes>,
-    {
-        fn push_bytes(&mut self, data: &[u8]) -> Result<Bytes> {
-            (self.f)(data)
-        }
-    }
-    // Used for testing the IoHandler functionality in generality.
-    // Can simulate any network condition via passed in closures/functions.
-    struct MockIo<R, W>
-    where
-        R: FnMut(&mut [u8]) -> std::io::Result<usize>,
-        W: Fn(&[u8]) -> std::io::Result<usize>,
-    {
-        r: R,
-        w: W,
-    }
-    impl<R, W> MockIo<R, W>
-    where
-        R: FnMut(&mut [u8]) -> std::io::Result<usize>,
-        W: Fn(&[u8]) -> std::io::Result<usize>,
-    {
-        fn new(r: R, w: W) -> Self {
-            Self { r, w }
-        }
-    }
-    impl<R, W> Read for MockIo<R, W>
-    where
-        R: FnMut(&mut [u8]) -> std::io::Result<usize>,
-        W: Fn(&[u8]) -> std::io::Result<usize>,
-    {
-        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-            (self.r)(buf)
-        }
-    }
-    impl<R, W> Write for MockIo<R, W>
-    where
-        R: FnMut(&mut [u8]) -> std::io::Result<usize>,
-        W: Fn(&[u8]) -> std::io::Result<usize>,
-    {
-        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-            (self.w)(buf)
-        }
-
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
     /* FRAMER TESTING */
     #[test]
     fn test_one_stx_one_edx() {
