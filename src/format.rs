@@ -10,9 +10,10 @@ pub(crate) const ESCAPE_CHAR: u8 = 0x07;
 pub(crate) const HEX_02_ESC: u8 = 0x30; // ASCII '0'
 pub(crate) const HEX_0D_ESC: u8 = 0x31; // ASCII '1'
 pub(crate) const HEX_07_ESC: u8 = 0x32; // ASCII '2'
+
 pub(crate) const MIN_PKT_SIZE: usize = 6;
 pub(crate) const STX: u8 = 0x02;
-pub(crate) const EDX: u8 = 0x1D;
+pub(crate) const EDX: u8 = 0x0D;
 
 // Traits used to handle packet format versioning
 pub trait SerizalizePacket {
