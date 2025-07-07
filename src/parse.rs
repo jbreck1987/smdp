@@ -410,4 +410,21 @@ mod tests {
         assert!(resp.is_ok());
         assert_ne!(resp.unwrap(), Bytes::copy_from_slice(&data));
     }
+
+    /* SMDP PROTOCOL TESTING */
+    #[test]
+    fn test_smdp_protocol_valid_frame_read() {
+        // Build valid frame and mock IO handler
+        let frame = vec![STX, 0x10, 0x80, 0x63u8, 0x45, 0x4C, 0x00, EDX];
+        let mut data_reader = Cursor::new(frame.clone());
+
+        // Given a buffer, the reader will push the bytes from the frame into it.
+        // Writer is trivial as it is not being tested.
+        let mock_io = MockIo::new(|buf| data_reader.read(buf), |_| Ok(0usize));
+
+        // Build SmdpProtocl and give it the mock IO
+        let mut proto: SmpdProtocol<MockIo<_, _>, SmdpPacket> = SmpdProtocol::new(mock_io, 200, 64);
+        let packet = proto.poll_once();
+        assert!(packet.is_err())
+    }
 }

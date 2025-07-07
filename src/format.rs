@@ -1,4 +1,4 @@
-use anyhow::{Result, anyhow};
+use anyhow::anyhow;
 use bitfield::{Bit, BitRange};
 use bytes::{Buf, BytesMut};
 use std::io::Write;
@@ -30,7 +30,11 @@ pub enum Error {
     InvalidEscapedVal { recvd: u8 },
     #[error("IO error: {0}")]
     IoError(#[from] std::io::Error),
+    #[error("Checksum Mismatch")]
+    ChecksumMismatch,
 }
+
+type PacketResult<T> = Result<T, Error>;
 
 // Traits used to handle packet format versioning
 pub trait SerizalizePacket {
@@ -73,7 +77,7 @@ pub(crate) enum ResponseCode {
     Reserved,
 }
 impl TryFrom<u8> for ResponseCode {
-    type Error = anyhow::Error;
+    type Error = Error;
 
     fn try_from(code: u8) -> Result<Self, Self::Error> {
         let res = match code {
@@ -84,7 +88,7 @@ impl TryFrom<u8> for ResponseCode {
             0x05 => ResponseCode::ErrInhibited,
             0x06 => ResponseCode::ErrObsolete,
             0x07 => ResponseCode::Reserved,
-            other => return Err(anyhow!("{} is not a valid response code.", other)),
+            _ => return Err(Error::InvalidRsp),
         };
         Ok(res)
     }
@@ -108,7 +112,7 @@ pub(crate) enum CommandCode {
     App(u8),
 }
 impl TryFrom<u8> for CommandCode {
-    type Error = anyhow::Error;
+    type Error = Error;
 
     fn try_from(code: u8) -> Result<Self, Self::Error> {
         let res = match code {
@@ -119,7 +123,7 @@ impl TryFrom<u8> for CommandCode {
             0x06 => CommandCode::AckPf,
             0x07 => CommandCode::ProcotolVer,
             c @ 0x08..=0x0F => CommandCode::App(c),
-            other => return Err(anyhow!("{} is not a valid command code.", other)),
+            _ => return Err(Error::InvalidCmd),
         };
         Ok(res)
     }
@@ -132,7 +136,7 @@ impl CommandResponse {
     /// handled in the protocol, at the protocol layer. Applications are not to use
     /// commands 1-7 except to implement the protocol specification. CMD codes 8-15
     /// are set aside for product application specific use.
-    pub(crate) fn cmd(&self) -> Result<CommandCode> {
+    pub(crate) fn cmd(&self) -> PacketResult<CommandCode> {
         let code: u8 = self.0.bit_range(7, 4);
         code.try_into()
     }
@@ -146,7 +150,7 @@ impl CommandResponse {
     /// packet, and sends it’s response. In the CMD_RSP byte, the CMD bits are
     /// unchanged from the master, but the RSP bits are filled in according to the status
     /// of the slave (from table)
-    pub(crate) fn rsp(&self) -> Result<ResponseCode> {
+    pub(crate) fn rsp(&self) -> PacketResult<ResponseCode> {
         let code: u8 = self.0.bit_range(2, 0);
         code.try_into()
     }
@@ -188,7 +192,7 @@ impl SmdpPacket {
     }
 }
 impl SerizalizePacket for SmdpPacket {
-    type SerializerError = anyhow::Error;
+    type SerializerError = Error;
     /// Serializes the packet into bytes after escaping characters in the payload.
     fn to_bytes_into(&self, buf: &mut impl std::io::Write) -> Result<(), Self::SerializerError> {
         // Write STX and "header" fields
@@ -217,31 +221,28 @@ impl SerizalizePacket for SmdpPacket {
     }
 }
 impl DeserializePacket for SmdpPacket {
-    type DeserializerError = anyhow::Error;
+    type DeserializerError = Error;
 
     fn from_bytes(buf: &[u8]) -> Result<Self, Self::DeserializerError> {
         let mut buf = BytesMut::from(buf);
         // Discard STX
-        _ = buf.try_get_u8().map_err(|_| anyhow!("buf is empty"));
+        _ = buf.try_get_u8().map_err(|_| Error::BufTooSmall);
 
         // Verify Address is in-range
-        let addr = buf.try_get_u8().map_err(|_| anyhow!("buf too small"))?;
+        let addr = buf.try_get_u8().map_err(|_| Error::BufTooSmall)?;
         if addr < 0x10 || addr > 0xFE {
-            return Err(anyhow!(
-                "{} is an invalid address. Valid addresses are 16 - 254",
-                addr
-            ));
+            return Err(Error::InvalidAddress { recvd: addr });
         }
         // Verify fields of CMD_RSP byte are valid
-        let cmd_rsp = buf.try_get_u8().map_err(|_| anyhow!("buf too small"))?;
+        let cmd_rsp = buf.try_get_u8().map_err(|_| Error::BufTooSmall)?;
         let cmd: u8 = cmd_rsp.bit_range(7, 4);
         if cmd < 0x01 || cmd > 0x0F {
-            return Err(anyhow!("CMD field invalid"));
+            return Err(Error::InvalidCmd);
         }
         // No need to check RSPF bit, either 0 or 1 is valid.
         let rsp: u8 = cmd_rsp.bit_range(2, 0);
         if rsp < 0x01 {
-            return Err(anyhow!("RSP field invalid"));
+            return Err(Error::InvalidRsp);
         }
         // Unescape Data field
         let mut data: Vec<u8> = Vec::with_capacity(buf.remaining() - 2);
@@ -254,7 +255,7 @@ impl DeserializePacket for SmdpPacket {
                     HEX_02_ESC => 0x02,
                     HEX_07_ESC => 0x07,
                     HEX_0D_ESC => 0x0D,
-                    other => return Err(anyhow!("Invalid escaped value: {other}")),
+                    other => return Err(Error::InvalidEscapedVal { recvd: other }),
                 };
                 escaped = false;
             }
@@ -268,7 +269,7 @@ impl DeserializePacket for SmdpPacket {
         let calculated_chk = mod256_checksum(&data, addr, cmd_rsp);
         let framed_chk = (buf.get_u8() << 4) | (buf.get_u8() & 0b00001111);
         if calculated_chk != framed_chk {
-            return Err(anyhow!("Checksum mismatch."));
+            return Err(Error::ChecksumMismatch);
         }
 
         // Deserialize into packet struct
@@ -297,12 +298,12 @@ mod test {
     #[test]
     fn test_command_code_from_u8_reserved() {
         let code = 1u8;
-        let res: Result<CommandCode> = code.try_into();
+        let res: PacketResult<CommandCode> = code.try_into();
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), CommandCode::Reserved);
 
         let code = 2u8;
-        let res: Result<CommandCode> = code.try_into();
+        let res: PacketResult<CommandCode> = code.try_into();
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), CommandCode::Reserved);
     }
