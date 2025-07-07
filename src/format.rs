@@ -59,7 +59,7 @@ pub trait DeserializePacket: Sized {
 pub trait PacketFormat: DeserializePacket + SerizalizePacket {}
 impl<T: SerizalizePacket + DeserializePacket> PacketFormat for T {}
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub enum ResponseCode {
     /// Command understood and executed. 0x01
     Ok,
@@ -94,7 +94,7 @@ impl TryFrom<u8> for ResponseCode {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub enum CommandCode {
     /// Reserved for future protocol stack use. 0x01, 0x02
     Reserved,
@@ -128,7 +128,7 @@ impl TryFrom<u8> for CommandCode {
         Ok(res)
     }
 }
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 struct CommandResponse(u8);
 impl CommandResponse {
     /// CMD = Command. These are the commands the master can issue to the slave. All
@@ -155,7 +155,7 @@ impl CommandResponse {
         code.try_into()
     }
 }
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct SmdpPacket {
     /// Start of text character (hex 02). Multiple STX characters in a row are allowed.
     /// Similarly, any data between STX characters is ignored. A single STX character
