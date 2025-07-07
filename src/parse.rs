@@ -186,7 +186,7 @@ where
     // This bound necessary while using Anyhow (required by Into<anyhow::Error>)
     P::DeserializerError: std::error::Error + Send + Sync + 'static,
 {
-    /// Attempts to read one SMDP packet from the wire after a request.
+    /// Attempts to read one SMDP packet from the IO handle after a request.
     pub fn poll_once(&mut self) -> Result<P> {
         let frame = self.io_handler.poll_once()?;
         P::from_bytes(frame.as_ref()).map_err(Error::from)
