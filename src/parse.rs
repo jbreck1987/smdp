@@ -155,14 +155,15 @@ where
     }
 }
 
-/// Packages all the individual components to go from the wire to serialized SmdpPacket.
-pub struct SmpdProtocol<T: Read + Write, P: PacketFormat + Clone> {
+/// Packages all the individual components to go from the wire to serialized SmdpPacket. Supports
+/// one packet format at a time.
+pub struct SmdpProtocol<T: Read + Write, P: PacketFormat + Clone> {
     io_handler: SmdpIoHandler<T, SmdpFramer>,
     /// Copy of the most recently serialized frame for comparison
     /// to return value.
     sent: Option<P>,
 }
-impl<T, P> SmpdProtocol<T, P>
+impl<T, P> SmdpProtocol<T, P>
 where
     T: Read + Write,
     P: PacketFormat + Clone,
@@ -176,7 +177,7 @@ where
         }
     }
 }
-impl<T, P> SmpdProtocol<T, P>
+impl<T, P> SmdpProtocol<T, P>
 where
     T: Read + Write,
     P: PacketFormat + Clone,
@@ -189,7 +190,7 @@ where
         P::from_bytes(frame.as_ref()).map_err(Error::from)
     }
 }
-impl<T, P> SmpdProtocol<T, P>
+impl<T, P> SmdpProtocol<T, P>
 where
     T: Read + Write,
     P: PacketFormat + Clone,
@@ -440,7 +441,7 @@ mod tests {
         let mock_io = MockIo::new(|buf| data_reader.read(buf), |_| Ok(0usize));
 
         // Build SmdpProtocl and give it the mock IO
-        let mut proto: SmpdProtocol<_, SmdpPacketV2> = SmpdProtocol::new(mock_io, 200, 64);
+        let mut proto: SmdpProtocol<_, SmdpPacketV2> = SmdpProtocol::new(mock_io, 200, 64);
         let packet = proto.poll_once();
 
         // Check deserialized packet against frame
@@ -479,7 +480,7 @@ mod tests {
         );
 
         // Build SmdpProtocl and give it the mock IO
-        let mut proto: SmpdProtocol<_, SmdpPacketV2> = SmpdProtocol::new(mock_io, 200, 64);
+        let mut proto: SmdpProtocol<_, SmdpPacketV2> = SmdpProtocol::new(mock_io, 200, 64);
         let _ = proto.write_once(&packet);
     }
 }
