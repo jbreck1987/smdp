@@ -156,7 +156,7 @@ impl CommandResponse {
     }
 }
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct SmdpPacket {
+pub struct SmdpPacketV2 {
     /// Start of text character (hex 02). Multiple STX characters in a row are allowed.
     /// Similarly, any data between STX characters is ignored. A single STX character
     /// syncs the receiver up to receive a new message, purging any data collected since
@@ -178,7 +178,7 @@ pub struct SmdpPacket {
     checksum_1: u8,
     checksum_2: u8,
 }
-impl SmdpPacket {
+impl SmdpPacketV2 {
     pub fn new(addr: u8, cmd_rsp: u8, data: Vec<u8>) -> Self {
         let (checksum_1, checksum_2) = mod256_checksum_split(&data, addr, cmd_rsp);
         Self {
@@ -215,7 +215,7 @@ impl SmdpPacket {
         (self.checksum_1, self.checksum_2)
     }
 }
-impl SerizalizePacket for SmdpPacket {
+impl SerizalizePacket for SmdpPacketV2 {
     type SerializerError = Error;
     /// Serializes the packet into bytes after escaping characters in the payload.
     fn to_bytes_into(&self, buf: &mut impl std::io::Write) -> Result<(), Self::SerializerError> {
@@ -244,7 +244,7 @@ impl SerizalizePacket for SmdpPacket {
         Ok(())
     }
 }
-impl DeserializePacket for SmdpPacket {
+impl DeserializePacket for SmdpPacketV2 {
     type DeserializerError = Error;
 
     fn from_bytes(buf: &[u8]) -> Result<Self, Self::DeserializerError> {
@@ -297,7 +297,7 @@ impl DeserializePacket for SmdpPacket {
         }
 
         // Deserialize into packet struct
-        Ok(SmdpPacket::new(addr, cmd_rsp, data))
+        Ok(SmdpPacketV2::new(addr, cmd_rsp, data))
     }
 }
 
@@ -341,7 +341,7 @@ mod test {
 
     #[test]
     fn extract_cmd_rsp_vals_from_packet_ok() {
-        let packet = SmdpPacket::new(16, 0x80, vec![10, 20]);
+        let packet = SmdpPacketV2::new(16, 0x80, vec![10, 20]);
         let cmd_rsp = packet.cmd_rsp;
         assert_eq!(cmd_rsp.cmd().unwrap(), CommandCode::App(8));
         assert_eq!(cmd_rsp.rspf(), false);
@@ -349,7 +349,7 @@ mod test {
     }
     #[test]
     fn serialize_packet_into_no_checksum_wrap_no_escape() {
-        let packet = SmdpPacket::new(16, 0x80, vec![10, 20]);
+        let packet = SmdpPacketV2::new(16, 0x80, vec![10, 20]);
         let mut bytes: Vec<u8> = Vec::new();
         packet.to_bytes_into(&mut bytes).unwrap();
         let checksum = 16u8 + 128 + 30;
@@ -362,7 +362,7 @@ mod test {
     }
     #[test]
     fn serialize_packet_into_with_checksum_wrap_no_escape() {
-        let packet = SmdpPacket::new(150, 0x80, vec![10, 20]);
+        let packet = SmdpPacketV2::new(150, 0x80, vec![10, 20]);
         let mut bytes: Vec<u8> = Vec::with_capacity(64);
         packet.to_bytes_into(&mut bytes).unwrap();
         let checksum = 150u8.wrapping_add(128).wrapping_add(30);
@@ -375,7 +375,7 @@ mod test {
     }
     #[test]
     fn serialize_packet_into_no_checksum_wrap_with_escape() {
-        let packet = SmdpPacket::new(16, 0x80, vec![5, 2, 7, 13]);
+        let packet = SmdpPacketV2::new(16, 0x80, vec![5, 2, 7, 13]);
         let mut bytes: Vec<u8> = Vec::with_capacity(64);
         packet.to_bytes_into(&mut bytes).unwrap();
         // Checksum calculated on non-escaped data!
@@ -403,7 +403,7 @@ mod test {
     }
     #[test]
     fn serialize_packet_into_with_checksum_wrap_with_escape() {
-        let packet = SmdpPacket::new(150, 0x80, vec![5, 2, 7, 13]);
+        let packet = SmdpPacketV2::new(150, 0x80, vec![5, 2, 7, 13]);
         let mut bytes: Vec<u8> = Vec::new();
         packet.to_bytes_into(&mut bytes).unwrap();
         // Checksum calculated on non-escaped data!
@@ -431,7 +431,7 @@ mod test {
     }
     #[test]
     fn serialize_packet_vec_no_checksum_wrap_no_escape() {
-        let packet = SmdpPacket::new(16, 0x80, vec![10, 20]);
+        let packet = SmdpPacketV2::new(16, 0x80, vec![10, 20]);
         let bytes = packet.to_bytes_vec().unwrap();
         let checksum = 16u8 + 128 + 30;
         let chk1 = ((checksum & 0b11110000) >> 4) + 0x30;
@@ -443,7 +443,7 @@ mod test {
     }
     #[test]
     fn serialize_packet_vec_with_checksum_wrap_no_escape() {
-        let packet = SmdpPacket::new(150, 0x80, vec![10, 20]);
+        let packet = SmdpPacketV2::new(150, 0x80, vec![10, 20]);
         let bytes = packet.to_bytes_vec().unwrap();
         let checksum = 150u8.wrapping_add(128).wrapping_add(30);
         let chk1 = ((checksum & 0b11110000) >> 4) + 0x30;
@@ -455,7 +455,7 @@ mod test {
     }
     #[test]
     fn serialize_packet_vec_no_checksum_wrap_with_escape() {
-        let packet = SmdpPacket::new(16, 0x80, vec![5, 2, 7, 13]);
+        let packet = SmdpPacketV2::new(16, 0x80, vec![5, 2, 7, 13]);
         let bytes = packet.to_bytes_vec().unwrap();
         // Checksum calculated on non-escaped data!
         let checksum = 16u8 + 128 + 27;
@@ -482,7 +482,7 @@ mod test {
     }
     #[test]
     fn serialize_packet_vec_with_checksum_wrap_with_escape() {
-        let packet = SmdpPacket::new(150, 0x80, vec![5, 2, 7, 13]);
+        let packet = SmdpPacketV2::new(150, 0x80, vec![5, 2, 7, 13]);
         let bytes = packet.to_bytes_vec().unwrap();
         // Checksum calculated on non-escaped data!
         let checksum = 150u8.wrapping_add(128).wrapping_add(27);
@@ -512,33 +512,33 @@ mod test {
     #[test]
     fn test_deser_valid_frame() {
         let data = vec![0x63u8, 0x45, 0x4C, 0x00];
-        let packet = SmdpPacket::new(0x10, 0x81, data);
+        let packet = SmdpPacketV2::new(0x10, 0x81, data);
         let mut ser = packet.to_bytes_vec().unwrap();
-        let de = SmdpPacket::from_bytes(&mut ser).unwrap();
+        let de = SmdpPacketV2::from_bytes(&mut ser).unwrap();
         assert_eq!(packet, de);
     }
     #[test]
     fn test_deser_invalid_frame_rsp_0() {
         let data = vec![0x63u8, 0x45, 0x4C, 0x00];
-        let packet = SmdpPacket::new(0x10, 0x80, data);
+        let packet = SmdpPacketV2::new(0x10, 0x80, data);
         let mut ser = packet.to_bytes_vec().unwrap();
-        let de = SmdpPacket::from_bytes(&mut ser);
+        let de = SmdpPacketV2::from_bytes(&mut ser);
         assert!(de.is_err());
     }
     #[test]
     fn test_deser_invalid_frame_bad_addr_hi() {
         let data = vec![0x63u8, 0x45, 0x4C, 0x00];
-        let packet = SmdpPacket::new(0xFF, 0x81, data);
+        let packet = SmdpPacketV2::new(0xFF, 0x81, data);
         let mut ser = packet.to_bytes_vec().unwrap();
-        let de = SmdpPacket::from_bytes(&mut ser);
+        let de = SmdpPacketV2::from_bytes(&mut ser);
         assert!(de.is_err());
     }
     #[test]
     fn test_deser_invalid_frame_bad_addr_lo() {
         let data = vec![0x63u8, 0x45, 0x4C, 0x00];
-        let packet = SmdpPacket::new(0x0F, 0x81, data);
+        let packet = SmdpPacketV2::new(0x0F, 0x81, data);
         let mut ser = packet.to_bytes_vec().unwrap();
-        let de = SmdpPacket::from_bytes(&mut ser);
+        let de = SmdpPacketV2::from_bytes(&mut ser);
         assert!(de.is_err());
     }
 }

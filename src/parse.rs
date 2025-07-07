@@ -1,6 +1,6 @@
 use crate::format::{
     DeserializePacket, EDX, ESCAPE_CHAR, HEX_0D_ESC, HEX_02_ESC, HEX_07_ESC, MIN_PKT_SIZE,
-    PacketFormat, STX, SmdpPacket, mod256_checksum,
+    PacketFormat, STX, SmdpPacketV2, mod256_checksum,
 };
 use anyhow::{Context, Error, Result, anyhow};
 use bitfield::{Bit, BitRange};
@@ -440,7 +440,7 @@ mod tests {
         let mock_io = MockIo::new(|buf| data_reader.read(buf), |_| Ok(0usize));
 
         // Build SmdpProtocl and give it the mock IO
-        let mut proto: SmpdProtocol<_, SmdpPacket> = SmpdProtocol::new(mock_io, 200, 64);
+        let mut proto: SmpdProtocol<_, SmdpPacketV2> = SmpdProtocol::new(mock_io, 200, 64);
         let packet = proto.poll_once();
 
         // Check deserialized packet against frame
@@ -466,7 +466,7 @@ mod tests {
         frame.push(EDX);
 
         // Build a packet
-        let packet = SmdpPacket::new(addr, cmd_rsp, data.clone());
+        let packet = SmdpPacketV2::new(addr, cmd_rsp, data.clone());
 
         // All value checking should be done in the writer, thats where the serialized bytes will
         // end up. Reader is trivial, it's not being tested.
@@ -479,7 +479,7 @@ mod tests {
         );
 
         // Build SmdpProtocl and give it the mock IO
-        let mut proto: SmpdProtocol<_, SmdpPacket> = SmpdProtocol::new(mock_io, 200, 64);
+        let mut proto: SmpdProtocol<_, SmdpPacketV2> = SmpdProtocol::new(mock_io, 200, 64);
         let _ = proto.write_once(&packet);
     }
 }
