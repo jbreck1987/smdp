@@ -205,7 +205,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_utils::*;
+    use crate::{format::mod256_checksum_split, test_utils::*};
     use rand::{Rng, thread_rng};
     use std::io::Cursor;
 
@@ -414,8 +414,18 @@ mod tests {
     /* SMDP PROTOCOL TESTING */
     #[test]
     fn test_smdp_protocol_valid_frame_read() {
-        // Build valid frame and mock IO handler
-        let frame = vec![STX, 0x10, 0x80, 0x63u8, 0x45, 0x4C, 0x00, EDX];
+        // Build valid frame to read and mock IO handler
+        let addr = 0x10u8;
+        let cmd_rsp = 0x81u8;
+        let data = vec![0x63u8, 0x45, 0x4C, 0x00];
+        let (chk1, chk2) = mod256_checksum_split(&data, addr, cmd_rsp);
+
+        let mut frame = vec![STX, addr, cmd_rsp];
+        frame.extend_from_slice(data.as_ref());
+        frame.extend_from_slice(&[chk1, chk2]);
+        frame.push(EDX);
+
+        // Wrap vec to give it Read
         let mut data_reader = Cursor::new(frame.clone());
 
         // Given a buffer, the reader will push the bytes from the frame into it.
@@ -423,8 +433,15 @@ mod tests {
         let mock_io = MockIo::new(|buf| data_reader.read(buf), |_| Ok(0usize));
 
         // Build SmdpProtocl and give it the mock IO
-        let mut proto: SmpdProtocol<MockIo<_, _>, SmdpPacket> = SmpdProtocol::new(mock_io, 200, 64);
+        let mut proto: SmpdProtocol<_, SmdpPacket> = SmpdProtocol::new(mock_io, 200, 64);
         let packet = proto.poll_once();
-        assert!(packet.is_err())
+
+        // Check deserialized packet against frame
+        assert!(packet.is_ok());
+        let packet = packet.unwrap();
+        assert_eq!(packet.addr(), addr);
+        assert_eq!(packet.cmd_rsp(), cmd_rsp);
+        assert_eq!(packet.data(), data);
+        assert_eq!(packet.checksum_split(), (chk1, chk2));
     }
 }
