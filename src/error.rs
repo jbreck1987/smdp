@@ -51,9 +51,6 @@ impl Error {
     pub fn is_format(&self) -> bool {
         self.kind == ErrorKind::Format
     }
-    //pub fn cause<E>(&self) -> Option<&(dyn std::error::Error + Sync + Send + 'static)> {
-    //    self.cause.as_deref()
-    //}
 }
 impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
