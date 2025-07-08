@@ -333,6 +333,33 @@ pub(crate) fn mod256_checksum_split(data: &[u8], addr: u8, cmd_rsp: u8) -> (u8, 
 #[cfg(test)]
 mod test {
     use super::*;
+    #[test]
+    fn test_mod256_checksum_no_wrap() {
+        let addr = 0x01u8;
+        let cmd_rsp = 0x02u8;
+        let data_sum: u8 = (0x03u8..=0x06).sum();
+        let sum = addr + cmd_rsp + data_sum;
+        assert_eq!(
+            sum,
+            mod256_checksum(&vec![0x03u8, 0x04, 0x05, 0x06], addr, cmd_rsp)
+        );
+    }
+    #[test]
+    fn test_mod256_checksum_with_wrap() {
+        let addr = 100u8;
+        let cmd_rsp = 155u8;
+        let wrapped_sum = 9; // 0 indexing
+        assert_eq!(wrapped_sum, mod256_checksum(&vec![1u8; 10], addr, cmd_rsp));
+    }
+    #[test]
+    fn test_mod256_checksum_split() {
+        let addr = 100u8;
+        let cmd_rsp = 165u8;
+        let empty = vec![];
+        let (cksum1, cksum2) = mod256_checksum_split(&empty, addr, cmd_rsp);
+        assert_eq!(cksum1, 0x30);
+        assert_eq!(cksum2, 0x39);
+    }
 
     #[test]
     fn test_command_code_from_u8_reserved() {
