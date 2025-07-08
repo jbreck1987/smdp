@@ -1,25 +1,31 @@
+use crate::error::{Error, SmdpResult};
 use crate::format::{EDX, MIN_PKT_SIZE, PacketFormat, STX};
-use anyhow::{Context, Result, anyhow};
-use bitfield::{Bit, BitRange};
-use bytes::{Buf, Bytes, BytesMut};
+use bytes::{Bytes, BytesMut};
 use std::{
     io::{ErrorKind, Read, Write},
     time::{Duration, Instant},
 };
+use thiserror;
 
 const READ_CHUNK_SIZE: usize = 512;
 
 /// Required methods for a Framer. Primarily used for testing.
 pub trait Framer {
+    type Error: std::error::Error + Send + Sync + 'static;
+
     /// Push bytes into Framer buffer for framing. Syncon is request/response, so
     /// there should only ever be one response frame per request.
-    fn push_bytes(&mut self, data: &[u8]) -> Result<Bytes>;
+    fn push_bytes(&mut self, data: &[u8]) -> Result<Bytes, Self::Error>;
 }
 
+#[derive(Debug, thiserror::Error)]
 pub(crate) enum ParseError {
-    FrameTooSmall,
-    MaxSizeOverflow,
-    InvalidFormat,
+    #[error("Frame too small, got {size} bytes. Min: {}", MIN_PKT_SIZE)]
+    FrameTooSmall { size: u8 },
+    #[error("Max frame size overflow, got {recvd}. Max: {max}")]
+    MaxSizeOverflow { max: usize, recvd: usize },
+    #[error("{0}")]
+    InvalidFormat(String),
 }
 /// Handles the framing logic for the SMDP protocol. The framer validates
 /// the structure of a stream of bytes and extracts a candidate packet, it does no parsing
@@ -36,9 +42,11 @@ impl SmdpFramer {
     }
 }
 impl Framer for SmdpFramer {
-    fn push_bytes(&mut self, data: &[u8]) -> Result<Bytes> {
+    type Error = Error;
+
+    fn push_bytes(&mut self, data: &[u8]) -> SmdpResult<Bytes> {
         if data.len() == 0 {
-            return Err(anyhow!("No bytes read"));
+            return Err(Error::into_parse(ParseError::FrameTooSmall { size: 0 }));
         }
         // Look for STX:
         // If at least one found, find pos of STX with the highest idx.
@@ -46,25 +54,29 @@ impl Framer for SmdpFramer {
         let stx_pos = data
             .iter()
             .rposition(|b| *b == STX)
-            .ok_or(anyhow!("Invalid format, STX not found"))?;
+            .ok_or(Error::into_parse(ParseError::InvalidFormat(
+                "STX not found".to_owned(),
+            )))?;
 
         // Look for EDX starting from idx after the stx position:
         // If at least one found, find pos of EDX with the lowest idx. Append data from [STX, EDX].
         // If this would cause an overflow, return MaxSizeOverflow. If none found, return InvalidFormat.
-        let edx_pos = data[stx_pos + 1..]
-            .iter()
-            .position(|b| *b == EDX)
-            .ok_or(anyhow!("Invalid format, EDX not found"))?
-            + (stx_pos + 1);
+        let edx_pos =
+            data[stx_pos + 1..]
+                .iter()
+                .position(|b| *b == EDX)
+                .ok_or(Error::into_parse(ParseError::InvalidFormat(
+                    "EDX not found".to_owned(),
+                )))?
+                + (stx_pos + 1);
 
         if data[stx_pos..=edx_pos].len() <= self.buf.capacity() {
             self.buf.extend_from_slice(&data[stx_pos..=edx_pos]);
         } else {
-            return Err(anyhow!(
-                "Frame too large, recvd {} bytes, max bytes allowed {}",
-                &data[stx_pos..=edx_pos].len(),
-                self.buf.capacity()
-            ));
+            return Err(Error::into_parse(ParseError::MaxSizeOverflow {
+                max: self.buf.capacity(),
+                recvd: data[stx_pos..=edx_pos].len(),
+            }));
         }
 
         // Check for min length. If too small, clear buffer and return FrameTooSmall. Otherwise
@@ -72,11 +84,9 @@ impl Framer for SmdpFramer {
         if self.buf.len() < MIN_PKT_SIZE {
             let buf_len = self.buf.len();
             self.buf.clear();
-            return Err(anyhow!(
-                "Frame too small, recvd {} bytes, min allowed {}",
-                buf_len,
-                MIN_PKT_SIZE
-            ));
+            return Err(Error::into_parse(ParseError::FrameTooSmall {
+                size: buf_len as u8,
+            }));
         } else {
             Ok(self.buf.split().freeze())
         }
@@ -111,7 +121,7 @@ where
     }
     // Attempts to read and frame bytes after a request for one
     // candidate SMDP packet.
-    fn poll_once(&mut self) -> Result<Bytes> {
+    fn poll_once(&mut self) -> SmdpResult<Bytes> {
         self.read_buf.fill(0);
         let timer = Instant::now();
         let mut total_bytes_read = 0usize;
@@ -129,13 +139,16 @@ where
                         buf_slice.copy_from_slice(&self.chunk[..n_read]);
                         total_bytes_read += n_read;
                     } else {
-                        return Err(anyhow!("Max frame size reached."));
+                        return Err(Error::into_parse(ParseError::MaxSizeOverflow {
+                            max: self.read_buf.capacity(),
+                            recvd: total_bytes_read + n_read,
+                        }));
                     }
                 }
                 // Chunk read blocked, continue to next chunk read
                 Err(ref e) if e.kind() == ErrorKind::WouldBlock => continue,
                 Err(e) => {
-                    return Err(anyhow!(e));
+                    return Err(Error::into_parse(e));
                 }
             }
             // Check timer
@@ -144,11 +157,13 @@ where
             }
         }
         // Attempt to frame bytes that were read
-        self.framer.push_bytes(&self.read_buf[..total_bytes_read])
+        self.framer
+            .push_bytes(&self.read_buf[..total_bytes_read])
+            .map_err(Error::into_parse)
     }
     /// Delegates `write_all` functionality to inner IO handle
-    fn write_all(&mut self, bytes: &[u8]) -> Result<()> {
-        self.io_handle.write_all(bytes).map_err(anyhow::Error::from)
+    fn write_all(&mut self, bytes: &[u8]) -> SmdpResult<()> {
+        self.io_handle.write_all(bytes).map_err(Error::into_parse)
     }
 }
 
@@ -178,25 +193,21 @@ impl<T, P> SmdpProtocol<T, P>
 where
     T: Read + Write,
     P: PacketFormat + Clone,
-    // This bound necessary while using Anyhow (required by Into<anyhow::Error>)
-    P::DeserializerError: std::error::Error + Send + Sync + 'static,
 {
     /// Attempts to read one SMDP packet from the IO handle after a request.
-    pub fn poll_once(&mut self) -> Result<P> {
+    pub fn poll_once(&mut self) -> SmdpResult<P> {
         let frame = self.io_handler.poll_once()?;
-        P::from_bytes(frame.as_ref()).map_err(anyhow::Error::from)
+        P::from_bytes(frame.as_ref()).map_err(Error::into_parse)
     }
 }
 impl<T, P> SmdpProtocol<T, P>
 where
     T: Read + Write,
     P: PacketFormat + Clone,
-    // This bound necessary while using Anyhow (required by Into<anyhow::Error>)
-    P::SerializerError: std::error::Error + Send + Sync + 'static,
 {
     /// Attempts to write one SMDP packet to the underlying IO handle.
-    pub fn write_once(&mut self, packet: &P) -> Result<()> {
-        let bytes = packet.to_bytes_vec()?;
+    pub fn write_once(&mut self, packet: &P) -> SmdpResult<()> {
+        let bytes = packet.to_bytes_vec().map_err(Error::into_parse)?;
         self.io_handler.write_all(bytes.as_ref())?;
 
         // If successful write, set sent as serialized packet.

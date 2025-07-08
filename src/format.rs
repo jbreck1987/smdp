@@ -37,7 +37,7 @@ type PacketResult<T> = Result<T, FormatError>;
 
 // Traits used to handle packet format versioning
 pub trait SerizalizePacket {
-    type SerializerError;
+    type SerializerError: std::error::Error + Send + Sync + 'static;
 
     fn to_bytes_into(&self, buf: &mut impl Write) -> Result<(), Self::SerializerError>;
 
@@ -49,7 +49,7 @@ pub trait SerizalizePacket {
     }
 }
 pub trait DeserializePacket: Sized {
-    type DeserializerError;
+    type DeserializerError: std::error::Error + Send + Sync + 'static;
 
     fn from_bytes(buf: &[u8]) -> Result<Self, Self::DeserializerError>;
 }

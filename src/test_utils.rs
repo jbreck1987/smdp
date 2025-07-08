@@ -1,7 +1,7 @@
 /* Common functionality used across unit and integration tests */
 
+use crate::error::{Error, SmdpResult};
 use crate::parse::{Framer, SmdpFramer};
-use anyhow::Result;
 use bytes::Bytes;
 use std::io::{Read, Write};
 
@@ -9,12 +9,12 @@ use std::io::{Read, Write};
 pub(crate) fn make_framer() -> SmdpFramer {
     SmdpFramer::new(1024)
 }
-pub(crate) struct MockFramer<F: Fn(&[u8]) -> Result<Bytes>> {
+pub(crate) struct MockFramer<F: Fn(&[u8]) -> SmdpResult<Bytes>> {
     f: F,
 }
 impl<F> MockFramer<F>
 where
-    F: Fn(&[u8]) -> Result<Bytes>,
+    F: Fn(&[u8]) -> SmdpResult<Bytes>,
 {
     pub(crate) fn new(f: F) -> Self {
         Self { f }
@@ -22,9 +22,10 @@ where
 }
 impl<F> Framer for MockFramer<F>
 where
-    F: Fn(&[u8]) -> Result<Bytes>,
+    F: Fn(&[u8]) -> SmdpResult<Bytes>,
 {
-    fn push_bytes(&mut self, data: &[u8]) -> Result<Bytes> {
+    type Error = Error;
+    fn push_bytes(&mut self, data: &[u8]) -> SmdpResult<Bytes> {
         (self.f)(data)
     }
 }

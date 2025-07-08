@@ -1,4 +1,9 @@
-/* Defines the public facing Error type. Following the Hyper error model */
+/*
+Defines the public facing Error type. Following the Hyper error model.
+In this model, all errors are Opaque and associated errors can be accessed by
+downcasting.
+*/
+
 #[derive(Debug, PartialEq)]
 pub enum ErrorKind {
     Parse,
@@ -66,3 +71,5 @@ impl std::fmt::Display for Error {
         }
     }
 }
+
+pub(crate) type SmdpResult<T> = Result<T, Error>;
