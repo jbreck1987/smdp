@@ -1,3 +1,4 @@
+use crate::error::{Error, SmdpResult};
 use bitfield::{Bit, BitRange};
 use bytes::{Buf, BytesMut};
 use std::io::Write;
@@ -32,8 +33,6 @@ pub enum FormatError {
     #[error("Checksum Mismatch")]
     ChecksumMismatch,
 }
-
-type PacketResult<T> = Result<T, FormatError>;
 
 // Traits used to handle packet format versioning
 pub trait SerizalizePacket {
@@ -76,7 +75,7 @@ pub enum ResponseCode {
     Reserved,
 }
 impl TryFrom<u8> for ResponseCode {
-    type Error = FormatError;
+    type Error = Error;
 
     fn try_from(code: u8) -> Result<Self, Self::Error> {
         let res = match code {
@@ -87,7 +86,7 @@ impl TryFrom<u8> for ResponseCode {
             0x05 => ResponseCode::ErrInhibited,
             0x06 => ResponseCode::ErrObsolete,
             0x07 => ResponseCode::Reserved,
-            _ => return Err(FormatError::InvalidRsp),
+            _ => return Err(Error::into_format(FormatError::InvalidRsp)),
         };
         Ok(res)
     }
@@ -111,7 +110,7 @@ pub enum CommandCode {
     App(u8),
 }
 impl TryFrom<u8> for CommandCode {
-    type Error = FormatError;
+    type Error = Error;
 
     fn try_from(code: u8) -> Result<Self, Self::Error> {
         let res = match code {
@@ -122,7 +121,7 @@ impl TryFrom<u8> for CommandCode {
             0x06 => CommandCode::AckPf,
             0x07 => CommandCode::ProcotolVer,
             c @ 0x08..=0x0F => CommandCode::App(c),
-            _ => return Err(FormatError::InvalidCmd),
+            _ => return Err(Error::into_format(FormatError::InvalidCmd)),
         };
         Ok(res)
     }
@@ -135,7 +134,7 @@ impl CommandResponse {
     /// handled in the protocol, at the protocol layer. Applications are not to use
     /// commands 1-7 except to implement the protocol specification. CMD codes 8-15
     /// are set aside for product application specific use.
-    pub(crate) fn cmd(&self) -> PacketResult<CommandCode> {
+    pub(crate) fn cmd(&self) -> SmdpResult<CommandCode> {
         let code: u8 = self.0.bit_range(7, 4);
         code.try_into()
     }
@@ -149,7 +148,7 @@ impl CommandResponse {
     /// packet, and sends it’s response. In the CMD_RSP byte, the CMD bits are
     /// unchanged from the master, but the RSP bits are filled in according to the status
     /// of the slave (from table)
-    pub(crate) fn rsp(&self) -> PacketResult<ResponseCode> {
+    pub(crate) fn rsp(&self) -> SmdpResult<ResponseCode> {
         let code: u8 = self.0.bit_range(2, 0);
         code.try_into()
     }
@@ -198,11 +197,11 @@ impl SmdpPacketV2 {
         self.cmd_rsp.0
     }
     /// Getter for the CMD value
-    pub fn cmd(&self) -> PacketResult<CommandCode> {
+    pub fn cmd(&self) -> SmdpResult<CommandCode> {
         self.cmd_rsp.cmd()
     }
     /// Getter for the RSP value
-    pub fn rsp(&self) -> PacketResult<ResponseCode> {
+    pub fn rsp(&self) -> SmdpResult<ResponseCode> {
         self.cmd_rsp.rsp()
     }
     /// Getter for the data bytes
@@ -215,57 +214,70 @@ impl SmdpPacketV2 {
     }
 }
 impl SerizalizePacket for SmdpPacketV2 {
-    type SerializerError = FormatError;
+    type SerializerError = Error;
     /// Serializes the packet into bytes after escaping characters in the payload.
     fn to_bytes_into(&self, buf: &mut impl std::io::Write) -> Result<(), Self::SerializerError> {
         // Write STX and "header" fields
-        buf.write_all(&[self.stx, self.addr, self.cmd_rsp.0])?;
+        buf.write_all(&[self.stx, self.addr, self.cmd_rsp.0])
+            .map_err(Error::into_format)?;
 
         // Walk data and escape characters as necessary before writing.
         for b in self.data.iter() {
             match b {
                 0x02 => {
-                    buf.write_all(&[ESCAPE_CHAR, HEX_02_ESC])?;
+                    buf.write_all(&[ESCAPE_CHAR, HEX_02_ESC])
+                        .map_err(Error::into_format)?;
                 }
                 0x0D => {
-                    buf.write_all(&[ESCAPE_CHAR, HEX_0D_ESC])?;
+                    buf.write_all(&[ESCAPE_CHAR, HEX_0D_ESC])
+                        .map_err(Error::into_format)?;
                 }
                 0x07 => {
-                    buf.write_all(&[ESCAPE_CHAR, HEX_07_ESC])?;
+                    buf.write_all(&[ESCAPE_CHAR, HEX_07_ESC])
+                        .map_err(Error::into_format)?;
                 }
                 _ => {
-                    buf.write_all(&[*b])?;
+                    buf.write_all(&[*b]).map_err(Error::into_format)?;
                 }
             }
         }
         // Write "Footer" fields and EDX
-        buf.write_all(&[self.checksum_1, self.checksum_2, EDX])?;
+        buf.write_all(&[self.checksum_1, self.checksum_2, EDX])
+            .map_err(Error::into_format)?;
         Ok(())
     }
 }
 impl DeserializePacket for SmdpPacketV2 {
-    type DeserializerError = FormatError;
+    type DeserializerError = Error;
 
     fn from_bytes(buf: &[u8]) -> Result<Self, Self::DeserializerError> {
         let mut buf = BytesMut::from(buf);
         // Discard STX
-        _ = buf.try_get_u8().map_err(|_| FormatError::BufTooSmall);
+        _ = buf
+            .try_get_u8()
+            .map_err(|_| Error::into_format(FormatError::BufTooSmall))?;
 
         // Verify Address is in-range
-        let addr = buf.try_get_u8().map_err(|_| FormatError::BufTooSmall)?;
+        let addr = buf
+            .try_get_u8()
+            .map_err(|_| Error::into_format(FormatError::BufTooSmall))?;
         if addr < 0x10 || addr > 0xFE {
-            return Err(FormatError::InvalidAddress { recvd: addr });
+            return Err(Error::into_format(FormatError::InvalidAddress {
+                recvd: addr,
+            }));
         }
         // Verify fields of CMD_RSP byte are valid
-        let cmd_rsp = buf.try_get_u8().map_err(|_| FormatError::BufTooSmall)?;
+        let cmd_rsp = buf
+            .try_get_u8()
+            .map_err(|_| Error::into_format(FormatError::BufTooSmall))?;
         let cmd: u8 = cmd_rsp.bit_range(7, 4);
         if cmd < 0x01 || cmd > 0x0F {
-            return Err(FormatError::InvalidCmd);
+            return Err(Error::into_format(FormatError::InvalidCmd));
         }
         // No need to check RSPF bit, either 0 or 1 is valid.
         let rsp: u8 = cmd_rsp.bit_range(2, 0);
         if rsp < 0x01 {
-            return Err(FormatError::InvalidRsp);
+            return Err(Error::into_format(FormatError::InvalidRsp));
         }
         // Unescape Data field
         let mut data: Vec<u8> = Vec::with_capacity(buf.remaining() - 2);
@@ -278,7 +290,11 @@ impl DeserializePacket for SmdpPacketV2 {
                     HEX_02_ESC => 0x02,
                     HEX_07_ESC => 0x07,
                     HEX_0D_ESC => 0x0D,
-                    other => return Err(FormatError::InvalidEscapedVal { recvd: other }),
+                    other => {
+                        return Err(Error::into_format(FormatError::InvalidEscapedVal {
+                            recvd: other,
+                        }));
+                    }
                 };
                 escaped = false;
             }
@@ -292,7 +308,7 @@ impl DeserializePacket for SmdpPacketV2 {
         let calculated_chk = mod256_checksum(&data, addr, cmd_rsp);
         let framed_chk = (buf.get_u8() << 4) | (buf.get_u8() & 0b00001111);
         if calculated_chk != framed_chk {
-            return Err(FormatError::ChecksumMismatch);
+            return Err(Error::into_format(FormatError::ChecksumMismatch));
         }
 
         // Deserialize into packet struct
@@ -321,12 +337,12 @@ mod test {
     #[test]
     fn test_command_code_from_u8_reserved() {
         let code = 1u8;
-        let res: PacketResult<CommandCode> = code.try_into();
+        let res: SmdpResult<CommandCode> = code.try_into();
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), CommandCode::Reserved);
 
         let code = 2u8;
-        let res: PacketResult<CommandCode> = code.try_into();
+        let res: SmdpResult<CommandCode> = code.try_into();
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), CommandCode::Reserved);
     }
