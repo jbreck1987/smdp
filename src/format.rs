@@ -315,7 +315,7 @@ impl DeserializePacket for SmdpPacketV1 {
         Ok(SmdpPacketV1::new(addr, cmd_rsp, data))
     }
 }
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct SmdpPacketV2 {
     /// Address field. This is a one byte field. Valid ranges of a valid address are 10 hex
     /// to FE hex (16 to 254 decimal). Addresses less than 10 hex are not allowed as they

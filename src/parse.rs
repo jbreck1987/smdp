@@ -253,7 +253,7 @@ where
 mod tests {
     use super::*;
     use crate::{
-        format::{SmdpPacketV2, mod256_checksum_split},
+        format::{SmdpPacketV1, mod256_checksum_split_v1},
         test_utils::*,
     };
     use rand::{Rng, thread_rng};
@@ -468,7 +468,7 @@ mod tests {
         let addr = 0x10u8;
         let cmd_rsp = 0x81u8;
         let data = vec![0x63u8, 0x45, 0x4C, 0x00];
-        let (chk1, chk2) = mod256_checksum_split(&data, addr, cmd_rsp);
+        let (chk1, chk2) = mod256_checksum_split_v1(&data, addr, cmd_rsp);
 
         let mut frame = vec![STX, addr, cmd_rsp];
         frame.extend_from_slice(data.as_ref());
@@ -483,7 +483,7 @@ mod tests {
         let mock_io = MockIo::new(|buf| data_reader.read(buf), |_| Ok(0usize));
 
         // Build SmdpProtocl and give it the mock IO
-        let mut proto: GenSmdpStack<_, SmdpPacketV2> = GenSmdpStack::new(mock_io, 200, 64);
+        let mut proto: GenSmdpStack<_, SmdpPacketV1> = GenSmdpStack::new(mock_io, 200, 64);
         let packet = proto.poll_once();
 
         // Check deserialized packet against frame
@@ -501,7 +501,7 @@ mod tests {
         let addr = 0x10u8;
         let cmd_rsp = 0x81u8;
         let data = vec![0x63u8, 0x45, 0x4C, 0x00];
-        let (chk1, chk2) = mod256_checksum_split(&data, addr, cmd_rsp);
+        let (chk1, chk2) = mod256_checksum_split_v1(&data, addr, cmd_rsp);
 
         let mut frame = vec![STX, addr, cmd_rsp];
         frame.extend_from_slice(data.as_ref());
@@ -509,7 +509,7 @@ mod tests {
         frame.push(EDX);
 
         // Build a packet
-        let packet = SmdpPacketV2::new(addr, cmd_rsp, data.clone());
+        let packet = SmdpPacketV1::new(addr, cmd_rsp, data.clone());
 
         // All value checking should be done in the writer, thats where the serialized bytes will
         // end up. Reader is trivial, it's not being tested.
@@ -522,7 +522,7 @@ mod tests {
         );
 
         // Build SmdpProtocl and give it the mock IO
-        let mut proto: GenSmdpStack<_, SmdpPacketV2> = GenSmdpStack::new(mock_io, 200, 64);
+        let mut proto: GenSmdpStack<_, SmdpPacketV1> = GenSmdpStack::new(mock_io, 200, 64);
         let _ = proto.write_once(&packet);
     }
 }

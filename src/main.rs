@@ -3,7 +3,7 @@ use std::time::Duration;
 use bytes::BufMut;
 use serialport;
 use smdp::{
-    GenSmdpStack, SerizalizePacket, SmdpPacketV1,
+    GenSmdpStack, SerizalizePacket, SmdpPacketV2,
     format::{CommandCode, ResponseCode},
 };
 
@@ -13,24 +13,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .data_bits(serialport::DataBits::Eight)
         .stop_bits(serialport::StopBits::One)
         .parity(serialport::Parity::None)
-        .timeout(Duration::from_millis(2000))
         .open_native()?;
-    let mut proto: GenSmdpStack<_, SmdpPacketV1> = GenSmdpStack::new(io_handle, 2500, 64);
+    let mut proto: GenSmdpStack<_, SmdpPacketV2> = GenSmdpStack::new(io_handle, 200, 32);
 
     // Format data to read compressor active minutes
     let mut comp_mins_data = vec![];
     comp_mins_data.put_u32(0x63454C00);
-    let empty: Vec<u8> = vec![];
 
     // Make packet
-    let comp_mins_pkt = SmdpPacketV1::new(16, 0x80, comp_mins_data);
+    let comp_mins_pkt = SmdpPacketV2::new(16, 0x80, 42, comp_mins_data);
     println!("{:?}", comp_mins_pkt.to_bytes_vec()?);
 
     // Send packet/parse reply
     proto.write_once(&comp_mins_pkt)?;
-    std::thread::sleep(Duration::from_millis(200));
     let comp_mins_reply = proto.poll_once()?;
-    println!("{:?}", comp_mins_reply.data());
 
+    // Get last 4 bytes and convert to u32;
+    let comp_mins = comp_mins_reply
+        .data()
+        .get(comp_mins_reply.data().len().saturating_sub(4)..)
+        .and_then(|slice| slice.try_into().ok())
+        .map(u32::from_be_bytes)
+        .ok_or("Not enough data bytes to make u32")?;
+    println!("Compressor on minutes: {}", comp_mins);
     Ok(())
 }
