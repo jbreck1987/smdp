@@ -8,7 +8,7 @@ pub use error::ErrorKind;
 pub use format::DeserializePacket;
 pub use format::PacketFormat;
 pub use format::SerizalizePacket;
-pub use format::SmdpPacketV2;
+pub use format::SmdpPacketV1;
 pub use parse::Framer;
 pub use parse::GenSmdpStack;
 
