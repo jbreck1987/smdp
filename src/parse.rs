@@ -168,49 +168,39 @@ where
 
 /// Packages all the individual components to go from the IO to serialized SmdpPacket. Supports
 /// one packet format at a time.
-pub struct GenSmdpStack<T: Read + Write, P: PacketFormat + Clone> {
+pub struct GenSmdpStack<T: Read + Write> {
     io_handler: SmdpIoHandler<T, SmdpFramer>,
-    /// Copy of the most recently serialized frame for comparison
-    /// to return value.
-    sent: Option<P>,
 }
-impl<T, P> GenSmdpStack<T, P>
+impl<T> GenSmdpStack<T>
 where
     T: Read + Write,
-    P: PacketFormat + Clone,
 {
     pub fn new(io_handle: T, read_timeout_ms: usize, max_frame_size: usize) -> Self {
         let framer = SmdpFramer::new(max_frame_size);
         let handler = SmdpIoHandler::new(io_handle, framer, read_timeout_ms, max_frame_size);
         Self {
             io_handler: handler,
-            sent: None,
         }
     }
 }
-impl<T, P> GenSmdpStack<T, P>
+impl<T> GenSmdpStack<T>
 where
     T: Read + Write,
-    P: PacketFormat + Clone,
 {
     /// Attempts to read one SMDP packet from the IO handle after a request.
-    pub fn poll_once(&mut self) -> SmdpResult<P> {
+    pub fn poll_once<P: PacketFormat>(&mut self) -> SmdpResult<P> {
         let frame = self.io_handler.poll_once()?;
         P::from_bytes(frame.as_ref()).map_err(Error::into_parse)
     }
 }
-impl<T, P> GenSmdpStack<T, P>
+impl<T> GenSmdpStack<T>
 where
     T: Read + Write,
-    P: PacketFormat + Clone,
 {
     /// Attempts to write one SMDP packet to the underlying IO handle.
-    pub fn write_once(&mut self, packet: &P) -> SmdpResult<()> {
+    pub fn write_once<P: PacketFormat>(&mut self, packet: &P) -> SmdpResult<()> {
         let bytes = packet.to_bytes_vec().map_err(Error::into_parse)?;
         self.io_handler.write_all(&bytes)?;
-
-        // If successful write, set sent as serialized packet.
-        self.sent = Some(packet.clone());
         Ok(())
     }
 }
@@ -511,12 +501,12 @@ mod tests {
         let mock_io = MockIo::new(|buf| data_reader.read(buf), |_| Ok(0usize));
 
         // Build SmdpProtocl and give it the mock IO
-        let mut proto: GenSmdpStack<_, SmdpPacketV1> = GenSmdpStack::new(mock_io, 200, 64);
+        let mut proto = GenSmdpStack::new(mock_io, 200, 64);
         let packet = proto.poll_once();
 
         // Check deserialized packet against frame
         assert!(packet.is_ok());
-        let packet = packet.unwrap();
+        let packet: SmdpPacketV1 = packet.unwrap();
         assert_eq!(packet.addr(), addr);
         assert_eq!(packet.cmd_rsp(), cmd_rsp);
         assert_eq!(packet.data(), data);
@@ -550,7 +540,7 @@ mod tests {
         );
 
         // Build SmdpProtocl and give it the mock IO
-        let mut proto: GenSmdpStack<_, SmdpPacketV1> = GenSmdpStack::new(mock_io, 200, 64);
+        let mut proto = GenSmdpStack::new(mock_io, 200, 64);
         let _ = proto.write_once(&packet);
     }
 }
