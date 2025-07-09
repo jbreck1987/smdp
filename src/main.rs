@@ -1,28 +1,30 @@
-use std::time::Duration;
+use std::{
+    io::{Read, Write},
+    time::Duration,
+};
 
 use bytes::BufMut;
 use serialport;
 use smdp::{
-    GenSmdpStack, SerizalizePacket, SmdpPacketV2,
+    GenSmdpStack, SerizalizePacket, SmdpPacketV1, SmdpPacketV2,
     format::{CommandCode, ResponseCode},
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let com = "/dev/tty.usbserial-130";
+    let com = "/dev/tty.usbserial-FT0AVM2G";
     let io_handle = serialport::new(com, 115200)
         .data_bits(serialport::DataBits::Eight)
         .stop_bits(serialport::StopBits::One)
         .parity(serialport::Parity::None)
         .open_native()?;
-    let mut proto: GenSmdpStack<_, SmdpPacketV2> = GenSmdpStack::new(io_handle, 200, 32);
+    let mut proto: GenSmdpStack<_, SmdpPacketV1> = GenSmdpStack::new(io_handle, 20, 32);
 
     // Format data to read compressor active minutes
     let mut comp_mins_data = vec![];
     comp_mins_data.put_u32(0x63454C00);
 
     // Make packet
-    let comp_mins_pkt = SmdpPacketV2::new(16, 0x80, 42, comp_mins_data);
-    println!("{:?}", comp_mins_pkt.to_bytes_vec()?);
+    let comp_mins_pkt = SmdpPacketV1::new(16, 0x80, comp_mins_data);
 
     // Send packet/parse reply
     proto.write_once(&comp_mins_pkt)?;
