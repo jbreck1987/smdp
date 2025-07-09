@@ -127,7 +127,7 @@ where
         let mut total_bytes_read = 0usize;
 
         // Canonical chunked read loop
-        loop {
+        while timer.elapsed() < self.read_timeout_ms {
             match self.io_handle.read(&mut self.chunk) {
                 // EOF reached
                 Ok(0) => break,
@@ -148,13 +148,7 @@ where
                 // Chunk read blocked, continue to next chunk read
                 Err(ref e) if e.kind() == ErrorKind::WouldBlock => continue,
                 // In case the handler does not send EOF appropriately
-                Err(ref e) if e.kind() == ErrorKind::TimedOut => {
-                    // Check timer
-                    if timer.elapsed() >= self.read_timeout_ms {
-                        break;
-                    }
-                    continue;
-                }
+                Err(ref e) if e.kind() == ErrorKind::TimedOut => continue,
                 Err(e) => {
                     return Err(Error::into_parse(e));
                 }
@@ -261,7 +255,11 @@ mod tests {
         test_utils::*,
     };
     use rand::{Rng, thread_rng};
-    use std::io::Cursor;
+    use std::{
+        io::Cursor,
+        sync::mpsc::{Sender, TryRecvError},
+        thread::JoinHandle,
+    };
 
     /* FRAMER TESTING */
     #[test]
@@ -424,11 +422,10 @@ mod tests {
         let mut rng = thread_rng();
         let mut data: [u8; 2048] = [0; 2048];
         rng.fill(&mut data);
-        let mut data_reader = Cursor::new(data.clone());
 
         // Build MockIO with a delayed sender
         let writer = |_: &[u8]| return Ok(0usize);
-        let reader = |_: &mut [u8]| Err(std::io::Error::new(ErrorKind::TimedOut, "Timed out"));
+        let reader = |_: &mut [u8]| Err(std::io::Error::new(ErrorKind::Interrupted, "Interrupted"));
         let mock_io = MockIo::new(reader, writer);
 
         // Build MockFramer
@@ -447,22 +444,48 @@ mod tests {
         rng.fill(&mut data);
         let mut data_reader = Cursor::new(data.clone());
 
+        // Create a thread that simulates a delayed sender (200ms between sends)
+        let (tx1, rx1) = std::sync::mpsc::channel();
+        let (tx2, rx2) = std::sync::mpsc::channel();
+        enum Signal {
+            End,
+        }
+
+        let jh: JoinHandle<()> = std::thread::spawn(move || {
+            loop {
+                _ = tx2.send(());
+                std::thread::sleep(Duration::from_millis(200));
+                match rx1.try_recv() {
+                    Ok(Signal::End) => break,
+                    Err(ref e) if *e == TryRecvError::Empty => continue,
+                    _ => break,
+                }
+            }
+        });
+
         // Build MockIO with a delayed sender
         let writer = |_: &[u8]| return Ok(0usize);
+        let main_tx1 = Sender::clone(&tx1);
         let reader = |buf: &mut [u8]| {
-            std::thread::sleep(Duration::from_millis(200));
-            data_reader.read(buf)
+            let mut n_read: usize = 0;
+            if let Ok(_) = rx2.try_recv() {
+                n_read = data_reader.read(buf).unwrap();
+            } else {
+                return Err(std::io::Error::new(ErrorKind::WouldBlock, "Would block"));
+            }
+            Ok(n_read)
         };
         let mock_io = MockIo::new(reader, writer);
 
         // Build MockFramer
         let mock_framer = MockFramer::new(|buf| Ok(Bytes::copy_from_slice(buf)));
 
-        // Build IoHandler and verify read is correct
-        let mut handler = SmdpIoHandler::new(mock_io, mock_framer, 200, 1024);
+        // Build IoHandler with short read timeout and verify recvd bytes are incomplete.
+        let mut handler = SmdpIoHandler::new(mock_io, mock_framer, 20, 1024);
         let resp = handler.poll_once();
-        assert!(resp.is_ok());
-        assert_ne!(resp.unwrap(), Bytes::copy_from_slice(&data));
+        assert_ne!(resp.unwrap().as_ref(), data);
+        _ = main_tx1.send(Signal::End);
+        _ = jh.join();
     }
 
     /* SMDP PROTOCOL TESTING */
