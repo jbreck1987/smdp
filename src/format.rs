@@ -338,7 +338,7 @@ pub struct SmdpPacketV2 {
 }
 impl SmdpPacketV2 {
     pub fn new(addr: u8, cmd_rsp: u8, srlno: u8, data: Vec<u8>) -> Self {
-        let (checksum_1, checksum_2) = mod256_checksum_split_v2(&data, addr, cmd_rsp);
+        let (checksum_1, checksum_2) = mod256_checksum_split_v2(&data, addr, cmd_rsp, srlno);
         Self {
             addr,
             cmd_rsp: CommandResponse(cmd_rsp),
@@ -477,7 +477,9 @@ impl DeserializePacket for SmdpPacketV2 {
             }));
         }
         // Verify checksum. Should be exactly 3 bytes remaining.
-        if (buf.get_u8(), buf.get_u8()) != mod256_checksum_split_v2(&unesc_data, addr, cmd_rsp) {
+        if (buf.get_u8(), buf.get_u8())
+            != mod256_checksum_split_v2(&unesc_data, addr, cmd_rsp, srlno)
+        {
             return Err(Error::into_format(FormatError::ChecksumMismatch));
         }
 
@@ -493,6 +495,13 @@ pub(crate) fn mod256_checksum(data: &[u8], addr: u8, cmd_rsp: u8) -> u8 {
     let acc = addr.wrapping_add(cmd_rsp);
     data.iter().fold(acc, |acc, el| acc.wrapping_add(*el))
 }
+/// Computes the Modulo 256 checksum of the Address, Command Response, Data, and SRLNO fields
+/// of the V2 packet. Note that this should be performed BEFORE escaping!
+pub(crate) fn mod256_checksum_v2(data: &[u8], addr: u8, cmd_rsp: u8, srlno: u8) -> u8 {
+    // `wrapping_add()` gives mod 256 behavior for u8 sums
+    let acc = addr.wrapping_add(cmd_rsp).wrapping_add(srlno);
+    data.iter().fold(acc, |acc, el| acc.wrapping_add(*el))
+}
 /// Convenience function to return the split mod256 checksum (MS nibble, LS nibble) plus
 /// offset required by the packet format. V1 only due to seed.
 pub(crate) fn mod256_checksum_split_v1(data: &[u8], addr: u8, cmd_rsp: u8) -> (u8, u8) {
@@ -501,8 +510,8 @@ pub(crate) fn mod256_checksum_split_v1(data: &[u8], addr: u8, cmd_rsp: u8) -> (u
 }
 /// Convenience function to return the split mod256 checksum (MS nibble, LS nibble) plus
 /// offset required by the packet format. V2 only due to seed.
-pub(crate) fn mod256_checksum_split_v2(data: &[u8], addr: u8, cmd_rsp: u8) -> (u8, u8) {
-    let chk = mod256_checksum(data, addr, cmd_rsp);
+pub(crate) fn mod256_checksum_split_v2(data: &[u8], addr: u8, cmd_rsp: u8, srlno: u8) -> (u8, u8) {
+    let chk = mod256_checksum_v2(data, addr, cmd_rsp, srlno);
     (((chk & 0b11110000) >> 4) + 0x40, (chk & 0b1111) + 0x40)
 }
 
@@ -541,7 +550,7 @@ mod test {
         let addr = 100u8;
         let cmd_rsp = 165u8;
         let empty = vec![];
-        let (cksum1, cksum2) = mod256_checksum_split_v2(&empty, addr, cmd_rsp);
+        let (cksum1, cksum2) = mod256_checksum_split_v2(&empty, addr, cmd_rsp, 0);
         assert_eq!(cksum1, 0x40);
         assert_eq!(cksum2, 0x49);
     }
@@ -756,7 +765,7 @@ mod test {
         let srlno = 0x18u8;
         let mut frame = vec![STX, addr, cmd_rsp];
         frame.extend_from_slice(&data);
-        let (ck1, ck2) = mod256_checksum_split_v2(&data, addr, cmd_rsp);
+        let (ck1, ck2) = mod256_checksum_split_v2(&data, addr, cmd_rsp, srlno);
         frame.extend_from_slice(&[srlno, ck1, ck2, EDX]);
         let de = SmdpPacketV2::from_bytes(&frame);
         assert_eq!(de.unwrap(), SmdpPacketV2::new(addr, cmd_rsp, srlno, data));
@@ -769,7 +778,7 @@ mod test {
         let srlno = 0x18u8;
         let mut frame = vec![STX, addr, cmd_rsp];
         frame.extend_from_slice(&data);
-        let (ck1, ck2) = mod256_checksum_split_v2(&data, addr, cmd_rsp);
+        let (ck1, ck2) = mod256_checksum_split_v2(&data, addr, cmd_rsp, srlno);
         frame.extend_from_slice(&[srlno, ck1, ck2, EDX]);
         let de = SmdpPacketV2::from_bytes(&frame);
         assert!(de.is_err());
@@ -794,7 +803,7 @@ mod test {
         let srlno = 0x18u8;
         let mut frame = vec![STX, addr, cmd_rsp];
         frame.extend_from_slice(&data);
-        let (ck1, ck2) = mod256_checksum_split_v2(&data, addr, cmd_rsp);
+        let (ck1, ck2) = mod256_checksum_split_v2(&data, addr, cmd_rsp, srlno);
         frame.extend_from_slice(&[srlno, ck1, ck2, EDX]);
         let de = SmdpPacketV2::from_bytes(&frame);
         assert!(de.is_err());
@@ -819,7 +828,7 @@ mod test {
         let srlno = 0x18u8;
         let mut frame = vec![STX, addr, cmd_rsp];
         frame.extend_from_slice(&data);
-        let (ck1, ck2) = mod256_checksum_split_v2(&data, addr, cmd_rsp);
+        let (ck1, ck2) = mod256_checksum_split_v2(&data, addr, cmd_rsp, srlno);
         frame.extend_from_slice(&[srlno, ck1, ck2, EDX]);
         let de = SmdpPacketV2::from_bytes(&frame);
         assert!(de.is_err());
@@ -844,7 +853,7 @@ mod test {
         let srlno = 0x10u8;
         let mut frame = vec![STX, addr, cmd_rsp];
         frame.extend_from_slice(&data);
-        let (ck1, ck2) = mod256_checksum_split_v2(&data, addr, cmd_rsp);
+        let (ck1, ck2) = mod256_checksum_split_v2(&data, addr, cmd_rsp, srlno);
         frame.extend_from_slice(&[srlno, ck1, ck2, EDX]);
         let de = SmdpPacketV2::from_bytes(&frame);
         assert!(de.is_err());
