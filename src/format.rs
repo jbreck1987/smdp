@@ -307,9 +307,7 @@ impl DeserializePacket for SmdpPacketV1 {
             data.push(curr_byte);
         }
         // Verify checksum. Should be exactly 3 bytes remaining.
-        let calculated_chk = mod256_checksum(&data, addr, cmd_rsp);
-        let framed_chk = ((buf.get_u8() - 0x30) << 4) | ((buf.get_u8() - 0x30) & 0b00001111);
-        if calculated_chk != framed_chk {
+        if (buf.get_u8(), buf.get_u8()) != mod256_checksum_split_v1(&data, addr, cmd_rsp) {
             return Err(Error::into_format(FormatError::ChecksumMismatch));
         }
 
@@ -479,9 +477,7 @@ impl DeserializePacket for SmdpPacketV2 {
             }));
         }
         // Verify checksum. Should be exactly 3 bytes remaining.
-        let calculated_chk = mod256_checksum(&unesc_data, addr, cmd_rsp);
-        let framed_chk = ((buf.get_u8() - 0x40) << 4) | ((buf.get_u8() - 0x40) & 0b00001111);
-        if calculated_chk != framed_chk {
+        if (buf.get_u8(), buf.get_u8()) != mod256_checksum_split_v2(&unesc_data, addr, cmd_rsp) {
             return Err(Error::into_format(FormatError::ChecksumMismatch));
         }
 
@@ -532,13 +528,22 @@ mod test {
         assert_eq!(wrapped_sum, mod256_checksum(&vec![1u8; 10], addr, cmd_rsp));
     }
     #[test]
-    fn test_mod256_checksum_split() {
+    fn test_mod256_checksum_split_v1() {
         let addr = 100u8;
         let cmd_rsp = 165u8;
         let empty = vec![];
         let (cksum1, cksum2) = mod256_checksum_split_v1(&empty, addr, cmd_rsp);
         assert_eq!(cksum1, 0x30);
         assert_eq!(cksum2, 0x39);
+    }
+    #[test]
+    fn test_mod256_checksum_split_v2() {
+        let addr = 100u8;
+        let cmd_rsp = 165u8;
+        let empty = vec![];
+        let (cksum1, cksum2) = mod256_checksum_split_v2(&empty, addr, cmd_rsp);
+        assert_eq!(cksum1, 0x40);
+        assert_eq!(cksum2, 0x49);
     }
 
     #[test]
@@ -732,19 +737,53 @@ mod test {
 
     /* DESERIALIZATION */
     #[test]
-    fn test_deser_valid_frame() {
+    fn test_deser_valid_frame_v1() {
         let data = vec![0x63u8, 0x45, 0x4C, 0x00];
-        let packet = SmdpPacketV1::new(0x10, 0x81, data);
-        let mut ser = packet.to_bytes_vec().unwrap();
-        let de = SmdpPacketV1::from_bytes(&mut ser).unwrap();
-        assert_eq!(packet, de);
+        let addr = 0x10u8;
+        let cmd_rsp = 0x81u8;
+        let mut frame = vec![STX, addr, cmd_rsp];
+        frame.extend_from_slice(&data);
+        let (ck1, ck2) = mod256_checksum_split_v1(&data, addr, cmd_rsp);
+        frame.extend_from_slice(&[ck1, ck2, EDX]);
+        let de = SmdpPacketV1::from_bytes(&frame);
+        assert!(de.is_ok());
     }
     #[test]
-    fn test_deser_invalid_frame_rsp_0() {
+    fn test_deser_valid_frame_v2() {
         let data = vec![0x63u8, 0x45, 0x4C, 0x00];
-        let packet = SmdpPacketV1::new(0x10, 0x80, data);
-        let mut ser = packet.to_bytes_vec().unwrap();
-        let de = SmdpPacketV1::from_bytes(&mut ser);
+        let addr = 0x10u8;
+        let cmd_rsp = 0x81u8;
+        let srlno = 0x18u8;
+        let mut frame = vec![STX, addr, cmd_rsp];
+        frame.extend_from_slice(&data);
+        let (ck1, ck2) = mod256_checksum_split_v2(&data, addr, cmd_rsp);
+        frame.extend_from_slice(&[srlno, ck1, ck2, EDX]);
+        let de = SmdpPacketV2::from_bytes(&frame);
+        assert!(de.is_ok());
+    }
+    #[test]
+    fn test_deser_invalid_frame_rsp_0_v2() {
+        let data = vec![0x63u8, 0x45, 0x4C, 0x00];
+        let addr = 0x10u8;
+        let cmd_rsp = 0x80u8;
+        let srlno = 0x18u8;
+        let mut frame = vec![STX, addr, cmd_rsp];
+        frame.extend_from_slice(&data);
+        let (ck1, ck2) = mod256_checksum_split_v2(&data, addr, cmd_rsp);
+        frame.extend_from_slice(&[srlno, ck1, ck2, EDX]);
+        let de = SmdpPacketV2::from_bytes(&frame);
+        assert!(de.is_err());
+    }
+    #[test]
+    fn test_deser_invalid_frame_rsp_0_v1() {
+        let data = vec![0x63u8, 0x45, 0x4C, 0x00];
+        let addr = 0x10u8;
+        let cmd_rsp = 0x80u8;
+        let mut frame = vec![STX, addr, cmd_rsp];
+        frame.extend_from_slice(&data);
+        let (ck1, ck2) = mod256_checksum_split_v1(&data, addr, cmd_rsp);
+        frame.extend_from_slice(&[ck1, ck2, EDX]);
+        let de = SmdpPacketV1::from_bytes(&frame);
         assert!(de.is_err());
     }
     #[test]
