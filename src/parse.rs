@@ -32,12 +32,12 @@ pub(crate) enum ParseError {
 /// of fields (E.g. will not verify checksum).
 pub(crate) struct SmdpFramer {
     // Buffer that holds incoming bytes from the reader.
-    buf: BytesMut,
+    buf: Vec<u8>,
 }
 impl SmdpFramer {
     pub(crate) fn new(max_size: usize) -> Self {
         Self {
-            buf: BytesMut::with_capacity(max_size),
+            buf: Vec::with_capacity(max_size),
         }
     }
 }
@@ -45,6 +45,7 @@ impl Framer for SmdpFramer {
     type Error = Error;
 
     fn push_bytes(&mut self, data: &[u8]) -> SmdpResult<Bytes> {
+        self.buf.clear();
         if data.len() == 0 {
             return Err(Error::into_parse(ParseError::FrameTooSmall { size: 0 }));
         }
@@ -88,7 +89,7 @@ impl Framer for SmdpFramer {
                 size: buf_len as u8,
             }));
         } else {
-            Ok(self.buf.split().freeze())
+            Ok(Bytes::copy_from_slice(&self.buf))
         }
     }
 }
