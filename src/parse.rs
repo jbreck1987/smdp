@@ -147,13 +147,17 @@ where
                 }
                 // Chunk read blocked, continue to next chunk read
                 Err(ref e) if e.kind() == ErrorKind::WouldBlock => continue,
+                // In case the handler does not send EOF appropriately
+                Err(ref e) if e.kind() == ErrorKind::TimedOut => {
+                    // Check timer
+                    if timer.elapsed() >= self.read_timeout_ms {
+                        break;
+                    }
+                    continue;
+                }
                 Err(e) => {
                     return Err(Error::into_parse(e));
                 }
-            }
-            // Check timer
-            if timer.elapsed() >= self.read_timeout_ms {
-                break;
             }
         }
         // Attempt to frame bytes that were read
@@ -208,7 +212,7 @@ where
     /// Attempts to write one SMDP packet to the underlying IO handle.
     pub fn write_once(&mut self, packet: &P) -> SmdpResult<()> {
         let bytes = packet.to_bytes_vec().map_err(Error::into_parse)?;
-        self.io_handler.write_all(bytes.as_ref())?;
+        self.io_handler.write_all(&bytes)?;
 
         // If successful write, set sent as serialized packet.
         self.sent = Some(packet.clone());
