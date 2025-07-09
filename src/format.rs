@@ -315,7 +315,7 @@ impl DeserializePacket for SmdpPacketV1 {
         Ok(SmdpPacketV1::new(addr, cmd_rsp, data))
     }
 }
-
+#[derive(Debug, PartialEq, Eq)]
 pub struct SmdpPacketV2 {
     /// Address field. This is a one byte field. Valid ranges of a valid address are 10 hex
     /// to FE hex (16 to 254 decimal). Addresses less than 10 hex are not allowed as they
@@ -746,7 +746,7 @@ mod test {
         let (ck1, ck2) = mod256_checksum_split_v1(&data, addr, cmd_rsp);
         frame.extend_from_slice(&[ck1, ck2, EDX]);
         let de = SmdpPacketV1::from_bytes(&frame);
-        assert!(de.is_ok());
+        assert_eq!(de.unwrap(), SmdpPacketV1::new(addr, cmd_rsp, data));
     }
     #[test]
     fn test_deser_valid_frame_v2() {
@@ -759,7 +759,7 @@ mod test {
         let (ck1, ck2) = mod256_checksum_split_v2(&data, addr, cmd_rsp);
         frame.extend_from_slice(&[srlno, ck1, ck2, EDX]);
         let de = SmdpPacketV2::from_bytes(&frame);
-        assert!(de.is_ok());
+        assert_eq!(de.unwrap(), SmdpPacketV2::new(addr, cmd_rsp, srlno, data));
     }
     #[test]
     fn test_deser_invalid_frame_rsp_0_v2() {
@@ -787,19 +787,66 @@ mod test {
         assert!(de.is_err());
     }
     #[test]
-    fn test_deser_invalid_frame_bad_addr_hi() {
+    fn test_deser_invalid_frame_addr_hi_v2() {
         let data = vec![0x63u8, 0x45, 0x4C, 0x00];
-        let packet = SmdpPacketV1::new(0xFF, 0x81, data);
-        let mut ser = packet.to_bytes_vec().unwrap();
-        let de = SmdpPacketV1::from_bytes(&mut ser);
+        let addr = 0xFFu8;
+        let cmd_rsp = 0x81u8;
+        let srlno = 0x18u8;
+        let mut frame = vec![STX, addr, cmd_rsp];
+        frame.extend_from_slice(&data);
+        let (ck1, ck2) = mod256_checksum_split_v2(&data, addr, cmd_rsp);
+        frame.extend_from_slice(&[srlno, ck1, ck2, EDX]);
+        let de = SmdpPacketV2::from_bytes(&frame);
         assert!(de.is_err());
     }
     #[test]
-    fn test_deser_invalid_frame_bad_addr_lo() {
+    fn test_deser_invalid_frame_addr_hi_v1() {
         let data = vec![0x63u8, 0x45, 0x4C, 0x00];
-        let packet = SmdpPacketV1::new(0x0F, 0x81, data);
-        let mut ser = packet.to_bytes_vec().unwrap();
-        let de = SmdpPacketV1::from_bytes(&mut ser);
+        let addr = 0xFFu8;
+        let cmd_rsp = 0x81u8;
+        let mut frame = vec![STX, addr, cmd_rsp];
+        frame.extend_from_slice(&data);
+        let (ck1, ck2) = mod256_checksum_split_v1(&data, addr, cmd_rsp);
+        frame.extend_from_slice(&[ck1, ck2, EDX]);
+        let de = SmdpPacketV1::from_bytes(&frame);
+        assert!(de.is_err());
+    }
+    #[test]
+    fn test_deser_invalid_frame_addr_lo_v2() {
+        let data = vec![0x63u8, 0x45, 0x4C, 0x00];
+        let addr = 0x0Fu8;
+        let cmd_rsp = 0x81u8;
+        let srlno = 0x18u8;
+        let mut frame = vec![STX, addr, cmd_rsp];
+        frame.extend_from_slice(&data);
+        let (ck1, ck2) = mod256_checksum_split_v2(&data, addr, cmd_rsp);
+        frame.extend_from_slice(&[srlno, ck1, ck2, EDX]);
+        let de = SmdpPacketV2::from_bytes(&frame);
+        assert!(de.is_err());
+    }
+    #[test]
+    fn test_deser_invalid_frame_addr_lo_v1() {
+        let data = vec![0x63u8, 0x45, 0x4C, 0x00];
+        let addr = 0x0Fu8;
+        let cmd_rsp = 0x81u8;
+        let mut frame = vec![STX, addr, cmd_rsp];
+        frame.extend_from_slice(&data);
+        let (ck1, ck2) = mod256_checksum_split_v1(&data, addr, cmd_rsp);
+        frame.extend_from_slice(&[ck1, ck2, EDX]);
+        let de = SmdpPacketV1::from_bytes(&frame);
+        assert!(de.is_err());
+    }
+    #[test]
+    fn test_deser_invalid_frame_srlno_lo_v2() {
+        let data = vec![0x63u8, 0x45, 0x4C, 0x00];
+        let addr = 0x10u8;
+        let cmd_rsp = 0x81u8;
+        let srlno = 0x10u8;
+        let mut frame = vec![STX, addr, cmd_rsp];
+        frame.extend_from_slice(&data);
+        let (ck1, ck2) = mod256_checksum_split_v2(&data, addr, cmd_rsp);
+        frame.extend_from_slice(&[srlno, ck1, ck2, EDX]);
+        let de = SmdpPacketV2::from_bytes(&frame);
         assert!(de.is_err());
     }
 }
