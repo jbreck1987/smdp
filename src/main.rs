@@ -5,7 +5,7 @@ use std::{
 
 use bytes::BufMut;
 use serialport;
-use smdp::{GenSmdpStack, PacketFormat, SmdpPacketV1, SmdpPacketV2};
+use smdp::{PacketFormat, SmdpPacketHandler, SmdpPacketV1, SmdpPacketV2};
 
 fn extract_data(data: &[u8]) -> Result<u32, &'static str> {
     data.get(data.len().saturating_sub(4)..)
@@ -15,7 +15,7 @@ fn extract_data(data: &[u8]) -> Result<u32, &'static str> {
 }
 fn send_get_cmd<T: Read + Write, P: PacketFormat + Clone>(
     packet: P,
-    stack: &mut GenSmdpStack<T, P>,
+    stack: &mut SmdpPacketHandler<T>,
 ) -> Result<P, Box<dyn std::error::Error>> {
     // Send packet/parse reply
     stack.write_once(&packet)?;
@@ -28,7 +28,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .stop_bits(serialport::StopBits::One)
         .parity(serialport::Parity::None)
         .open_native()?;
-    let mut proto: GenSmdpStack<_, SmdpPacketV2> = GenSmdpStack::new(io_handle, 50, 32);
+    let mut proto = SmdpPacketHandler::new(io_handle, 50, 32);
     let mut ctr = 0usize;
 
     while ctr < 20 {

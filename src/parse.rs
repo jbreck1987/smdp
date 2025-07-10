@@ -178,10 +178,10 @@ where
 
 /// Packages all the individual components to go from the IO to serialized SmdpPacket. Supports
 /// one packet format at a time.
-pub struct GenSmdpStack<T: Read + Write> {
+pub struct SmdpPacketHandler<T: Read + Write> {
     io_handler: SmdpIoHandler<T, SmdpFramer>,
 }
-impl<T> GenSmdpStack<T>
+impl<T> SmdpPacketHandler<T>
 where
     T: Read + Write,
 {
@@ -193,7 +193,7 @@ where
         }
     }
 }
-impl<T> GenSmdpStack<T>
+impl<T> SmdpPacketHandler<T>
 where
     T: Read + Write,
 {
@@ -483,7 +483,7 @@ mod tests {
         let mock_io = MockIo::new(|buf| data_reader.read(buf), |_| Ok(0usize));
 
         // Build SmdpProtocl and give it the mock IO
-        let mut proto = GenSmdpStack::new(mock_io, 200, 64);
+        let mut proto = SmdpPacketHandler::new(mock_io, 200, 64);
         let packet = proto.poll_once();
 
         // Check deserialized packet against frame
@@ -522,7 +522,7 @@ mod tests {
         );
 
         // Build SmdpProtocl and give it the mock IO
-        let mut proto = GenSmdpStack::new(mock_io, 200, 64);
+        let mut proto = SmdpPacketHandler::new(mock_io, 200, 64);
         let _ = proto.write_once(&packet);
     }
 }

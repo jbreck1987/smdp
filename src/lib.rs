@@ -11,7 +11,7 @@ pub use format::SerizalizePacket;
 pub use format::SmdpPacketV1;
 pub use format::SmdpPacketV2;
 pub use parse::Framer;
-pub use parse::GenSmdpStack;
+pub use parse::SmdpPacketHandler;
 
 #[cfg(test)]
 pub(crate) mod test_utils;
