@@ -51,9 +51,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         batt_low_data.put_u32(0x63357400);
         let batt_low_pkt = SmdpPacketV2::new(16, 0x80, 20, batt_low_data);
         let batt_low = extract_data(send_get_cmd(batt_low_pkt, &mut proto)?.data())?;
+
+        // Well-known read-only CMD opcodes
         println!("Battery Low: {}", batt_low != 0);
-        ctr += 1;
+        println!("Product ID: {}", proto.product_id(0x10)?);
+        println!("Sw ver: {}", proto.sw_ver(0x10)?);
+        println!("Proto ver: {}", proto.proto_ver(0x10)?);
+
         std::thread::sleep(Duration::from_secs(1));
+        ctr += 1;
     }
 
     Ok(())
