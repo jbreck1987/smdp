@@ -1,5 +1,6 @@
 use crate::error::{Error, SmdpResult};
-use crate::format::{EDX, MIN_PKT_SIZE, PacketFormat, STX};
+use crate::format::{CommandCode, EDX, FormatError, MIN_PKT_SIZE, PacketFormat, STX};
+use crate::{SmdpPacketV1, SmdpPacketV2};
 use bytes::{Bytes, BytesMut};
 use std::{
     io::{ErrorKind, Read, Write},
@@ -26,6 +27,8 @@ pub(crate) enum ParseError {
     MaxSizeOverflow { max: usize, recvd: usize },
     #[error("{0}")]
     InvalidFormat(String),
+    #[error("{0}")]
+    Other(String),
 }
 /// Handles the framing logic for the SMDP protocol. The framer validates
 /// the structure of a stream of bytes and extracts a candidate packet, it does no parsing
@@ -176,8 +179,7 @@ where
     }
 }
 
-/// Packages all the individual components to go from the IO to serialized SmdpPacket. Supports
-/// one packet format at a time.
+/// Packages all the individual components to go to/from the IO from/to serialized SmdpPacket.
 pub struct SmdpPacketHandler<T: Read + Write> {
     io_handler: SmdpIoHandler<T, SmdpFramer>,
 }
@@ -212,11 +214,71 @@ where
         let frame = self.io_handler.poll_once_with_framer(framer)?;
         P::from_bytes(frame.as_ref()).map_err(Error::into_parse)
     }
-    // Attempts to write one SMDP packet to the underlying IO handle.
+    /// Attempts to write one SMDP packet to the underlying IO handle.
     pub fn write_once<P: PacketFormat>(&mut self, packet: &P) -> SmdpResult<()> {
         let bytes = packet.to_bytes_vec().map_err(Error::into_parse)?;
         self.io_handler.write_all(&bytes)?;
         Ok(())
+    }
+    /// Attempts to poll the slave to return the Sycon product ID, returned as decimal string,
+    /// using the well-known opcode 0x30. Uses V1 format.
+    pub fn product_id(&mut self, addr: u8) -> SmdpResult<String> {
+        let cmd_code: u8 = CommandCode::ProdId.try_into()?;
+        let resp = self.well_known_opcode_helper(addr, cmd_code)?;
+        Ok(String::from_utf8(resp).map_err(Error::into_parse)?)
+    }
+    /// Attempts to poll the slave to return its software version, returned as decimal string,
+    /// using the well-known opcode 0x40. Uses V1 format.
+    pub fn sw_ver(&mut self, addr: u8) -> SmdpResult<String> {
+        let cmd_code: u8 = CommandCode::SwVersion.try_into()?;
+        let resp = self.well_known_opcode_helper(addr, cmd_code)?;
+        Ok(String::from_utf8(resp).map_err(Error::into_parse)?)
+    }
+    /// Attempts to instruct slave to reset using the well-known opcode 0x50. Uses V1 format.
+    pub fn reset(&mut self, addr: u8) -> SmdpResult<()> {
+        let cmd_code: u8 = CommandCode::Reset.try_into()?;
+        let _ = self.well_known_opcode_helper(addr, cmd_code)?;
+        Ok(())
+    }
+    /// Acknowledges the receipt of an RSPF bit set from a slave using the well-known opcode 0x60.
+    /// Uses V1 format.
+    pub fn clear_rspf(&mut self, addr: u8) -> SmdpResult<()> {
+        let cmd_code: u8 = CommandCode::AckPf.try_into()?;
+        let _ = self.well_known_opcode_helper(addr, cmd_code)?;
+        Ok(())
+    }
+    /// Attempts to poll the slave to return its protocl stack version, returned as decimal string,
+    /// using the well-known opcode 0x70. Uses V1 format.
+    pub fn proto_ver(&mut self, addr: u8) -> SmdpResult<String> {
+        let cmd_code: u8 = CommandCode::ProcotolVer.try_into()?;
+        let resp = self.well_known_opcode_helper(addr, cmd_code)?;
+        Ok(String::from_utf8(resp).map_err(Error::into_parse)?)
+    }
+    /// Private helper for the well-known opcode requests
+    fn well_known_opcode_helper(&mut self, addr: u8, code: u8) -> SmdpResult<Vec<u8>> {
+        let v1_pkt = SmdpPacketV1::new(addr, code << 4, vec![]);
+        self.write_once(&v1_pkt)?;
+        let resp: SmdpPacketV1 = self.poll_once()?;
+
+        // Make sure there are errors in the RSP field
+        let resp_result = match resp.rsp()? {
+            crate::format::ResponseCode::Ok => Ok(()),
+            crate::format::ResponseCode::ErrInvalidCmd => Err("Invalid command"),
+            crate::format::ResponseCode::ErrSyntax => Err("Syntax error"),
+            crate::format::ResponseCode::ErrRange => Err("Range error"),
+            crate::format::ResponseCode::ErrInhibited => Err("Inhibited"),
+            crate::format::ResponseCode::ErrObsolete => Err("Obsolete comand"),
+            crate::format::ResponseCode::Reserved => Err("Rsp value 0x00 is reserved"),
+        };
+        match resp_result {
+            Ok(_) => Ok(resp.data().to_vec()),
+            Err(e) => {
+                return Err(Error::into_parse(ParseError::Other(format!(
+                    "Received non-OK RSP value in response: {}",
+                    e
+                ))));
+            }
+        }
     }
 }
 
