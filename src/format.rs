@@ -96,8 +96,10 @@ impl TryFrom<u8> for ResponseCode {
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum CommandCode {
-    /// Reserved for future protocol stack use. 0x01, 0x02
-    Reserved,
+    /// Reserved for future protocol stack use. 0x01
+    ReservedOne,
+    /// Reserved for future protocol stack use. 0x02
+    ReservedTwo,
     /// Product ID, returned as decimal string. 0x03
     ProdId,
     /// Request slave to return software version string. 0x04
@@ -116,7 +118,8 @@ impl TryFrom<u8> for CommandCode {
 
     fn try_from(code: u8) -> Result<Self, Self::Error> {
         let res = match code {
-            0x01 | 0x02 => CommandCode::Reserved,
+            0x01 => CommandCode::ReservedOne,
+            0x02 => CommandCode::ReservedTwo,
             0x03 => CommandCode::ProdId,
             0x04 => CommandCode::SwVersion,
             0x05 => CommandCode::Reset,
@@ -126,6 +129,27 @@ impl TryFrom<u8> for CommandCode {
             _ => return Err(Error::into_format(FormatError::InvalidCmd)),
         };
         Ok(res)
+    }
+}
+impl TryFrom<CommandCode> for u8 {
+    type Error = Error;
+    fn try_from(code: CommandCode) -> Result<Self, Self::Error> {
+        match code {
+            CommandCode::ReservedOne => Ok(0x01),
+            CommandCode::ReservedTwo => Ok(0x02),
+            CommandCode::ProdId => Ok(0x03),
+            CommandCode::SwVersion => Ok(0x04),
+            CommandCode::Reset => Ok(0x05),
+            CommandCode::AckPf => Ok(0x06),
+            CommandCode::ProcotolVer => Ok(0x07),
+            CommandCode::App(c) => {
+                if (0x08u8..=0x0F).contains(&c) {
+                    Ok(c)
+                } else {
+                    Err(Error::into_format(FormatError::InvalidCmd))
+                }
+            }
+        }
     }
 }
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -560,12 +584,12 @@ mod test {
         let code = 1u8;
         let res: SmdpResult<CommandCode> = code.try_into();
         assert!(res.is_ok());
-        assert_eq!(res.unwrap(), CommandCode::Reserved);
+        assert_eq!(res.unwrap(), CommandCode::ReservedOne);
 
         let code = 2u8;
         let res: SmdpResult<CommandCode> = code.try_into();
         assert!(res.is_ok());
-        assert_eq!(res.unwrap(), CommandCode::Reserved);
+        assert_eq!(res.unwrap(), CommandCode::ReservedTwo);
     }
     #[test]
     fn test_command_response_ok() {
