@@ -120,9 +120,22 @@ where
             chunk: [0; READ_CHUNK_SIZE],
         }
     }
-    // Attempts to read and frame bytes after a request for one
-    // candidate SMDP packet.
     fn poll_once(&mut self) -> SmdpResult<Bytes> {
+        let bytes_read = self.read_frame()?;
+        // Attempt to frame bytes that were read
+        self.framer
+            .push_bytes(&self.read_buf[..bytes_read])
+            .map_err(Error::into_parse)
+    }
+    fn poll_once_with_framer<F2: Framer>(&mut self, framer: &mut F2) -> SmdpResult<Bytes> {
+        let bytes_read = self.read_frame()?;
+        // Attempt to frame bytes that were read
+        framer
+            .push_bytes(&self.read_buf[..bytes_read])
+            .map_err(Error::into_parse)
+    }
+    // Reads bytes from the low-level I/O handle
+    fn read_frame(&mut self) -> SmdpResult<usize> {
         self.read_buf.fill(0);
         let timer = Instant::now();
         let mut total_bytes_read = 0usize;
@@ -155,10 +168,7 @@ where
                 }
             }
         }
-        // Attempt to frame bytes that were read
-        self.framer
-            .push_bytes(&self.read_buf[..total_bytes_read])
-            .map_err(Error::into_parse)
+        Ok(total_bytes_read)
     }
     /// Delegates `write_all` functionality to inner IO handle
     fn write_all(&mut self, bytes: &[u8]) -> SmdpResult<()> {
@@ -187,17 +197,22 @@ impl<T> GenSmdpStack<T>
 where
     T: Read + Write,
 {
-    /// Attempts to read one SMDP packet from the IO handle after a request.
+    /// Attempts to read one SMDP packet from the IO handle after a request using the
+    /// default Framer.
     pub fn poll_once<P: PacketFormat>(&mut self) -> SmdpResult<P> {
         let frame = self.io_handler.poll_once()?;
         P::from_bytes(frame.as_ref()).map_err(Error::into_parse)
     }
-}
-impl<T> GenSmdpStack<T>
-where
-    T: Read + Write,
-{
-    /// Attempts to write one SMDP packet to the underlying IO handle.
+    /// Attempts to read one SMDP packet from the IO handle after a request using
+    /// Framer passed by caller.
+    pub fn poll_once_with_framer<P: PacketFormat, F: Framer>(
+        &mut self,
+        framer: &mut F,
+    ) -> SmdpResult<P> {
+        let frame = self.io_handler.poll_once_with_framer(framer)?;
+        P::from_bytes(frame.as_ref()).map_err(Error::into_parse)
+    }
+    // Attempts to write one SMDP packet to the underlying IO handle.
     pub fn write_once<P: PacketFormat>(&mut self, packet: &P) -> SmdpResult<()> {
         let bytes = packet.to_bytes_vec().map_err(Error::into_parse)?;
         self.io_handler.write_all(&bytes)?;
@@ -205,39 +220,6 @@ where
     }
 }
 
-/// Builder for the SmdpStack type
-pub struct SmdpStackBuilder<F: Framer, T: Read + Write> {
-    read_timeout: usize,
-    max_frame_size: usize,
-    framer: Option<F>,
-    io_handle: T,
-}
-impl<F, T> SmdpStackBuilder<F, T>
-where
-    F: Framer,
-    T: Read + Write,
-{
-    fn new(io_handle: T) -> Self {
-        Self {
-            read_timeout: 200,
-            max_frame_size: 64,
-            framer: None,
-            io_handle: io_handle,
-        }
-    }
-    fn framer(mut self, framer: F) -> Self {
-        self.framer = Some(framer);
-        self
-    }
-    fn read_timeout_ms(mut self, timeout: usize) -> Self {
-        self.read_timeout = timeout;
-        self
-    }
-    fn max_frame_size(mut self, size: usize) -> Self {
-        self.max_frame_size = size;
-        self
-    }
-}
 #[cfg(test)]
 mod tests {
     use super::*;
