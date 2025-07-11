@@ -230,6 +230,10 @@ impl SmdpPacketV1 {
     pub fn rsp(&self) -> SmdpResult<ResponseCode> {
         self.cmd_rsp.rsp()
     }
+    /// Getter for the RSPF value
+    pub fn rspf(&self) -> bool {
+        self.cmd_rsp.rspf()
+    }
     /// Getter for the data bytes
     pub fn data(&self) -> &[u8] {
         self.data.as_ref()
@@ -387,6 +391,10 @@ impl SmdpPacketV2 {
     /// Getter for the RSP value
     pub fn rsp(&self) -> SmdpResult<ResponseCode> {
         self.cmd_rsp.rsp()
+    }
+    /// Getter for the RSPF value
+    pub fn rspf(&self) -> bool {
+        self.cmd_rsp.rspf()
     }
     /// Getter for the data bytes
     pub fn data(&self) -> &[u8] {
