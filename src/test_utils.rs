@@ -9,6 +9,7 @@ use std::io::{Read, Write};
 pub(crate) fn make_framer() -> SmdpFramer {
     SmdpFramer::new(1024)
 }
+#[derive(Debug)]
 pub(crate) struct MockFramer<F: Fn(&[u8]) -> SmdpResult<Bytes>> {
     f: F,
 }
@@ -31,6 +32,7 @@ where
 }
 // Used for testing the IoHandler functionality in generality.
 // Can simulate any network condition via passed in closures/functions.
+#[derive(Debug, Clone)]
 pub struct MockIo<R, W>
 where
     R: FnMut(&mut [u8]) -> std::io::Result<usize>,

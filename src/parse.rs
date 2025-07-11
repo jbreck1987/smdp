@@ -1,7 +1,7 @@
+use crate::SmdpPacketV1;
 use crate::error::{Error, SmdpResult};
-use crate::format::{CommandCode, EDX, FormatError, MIN_PKT_SIZE, PacketFormat, STX};
-use crate::{SmdpPacketV1, SmdpPacketV2};
-use bytes::{Bytes, BytesMut};
+use crate::format::{CommandCode, EDX, MIN_PKT_SIZE, PacketFormat, STX};
+use bytes::Bytes;
 use std::{
     io::{ErrorKind, Read, Write},
     time::{Duration, Instant},
@@ -36,6 +36,7 @@ type ParseResult<T> = Result<T, ParseError>;
 /// Handles the framing logic for the SMDP protocol. The framer validates
 /// the structure of a stream of bytes and extracts a candidate packet, it does no parsing
 /// of fields (E.g. will not verify checksum).
+#[derive(Debug, PartialEq, Clone)]
 pub(crate) struct SmdpFramer {
     // Buffer that holds incoming bytes from the reader.
     buf: Vec<u8>,
@@ -97,6 +98,7 @@ impl Framer for SmdpFramer {
 
 /// Manages reading/writing bytes to/from IO and delegate reads to protocol framer.
 /// Only uses the basic Read/Write API, customization is up to the caller.
+#[derive(Debug)]
 struct SmdpIoHandler<T: Read + Write, F: Framer> {
     io_handle: T,
     framer: F,
@@ -178,6 +180,7 @@ where
 }
 
 /// Packages all the individual components to go to/from the IO from/to serialized SmdpPacket.
+#[derive(Debug)]
 pub struct SmdpPacketHandler<T: Read + Write> {
     io_handler: SmdpIoHandler<T, SmdpFramer>,
 }
@@ -192,11 +195,6 @@ where
             io_handler: handler,
         }
     }
-}
-impl<T> SmdpPacketHandler<T>
-where
-    T: Read + Write,
-{
     /// Attempts to read one SMDP packet from the IO handle after a request using the
     /// default Framer.
     pub fn poll_once<P: PacketFormat>(&mut self) -> SmdpResult<P> {
@@ -500,13 +498,12 @@ mod tests {
         let writer = |_: &[u8]| return Ok(0usize);
         let main_tx1 = Sender::clone(&tx1);
         let reader = |buf: &mut [u8]| {
-            let mut n_read: usize = 0;
             if let Ok(_) = rx2.try_recv() {
-                n_read = data_reader.read(buf).unwrap();
+                let n_read = data_reader.read(buf).unwrap();
+                Ok(n_read)
             } else {
                 return Err(std::io::Error::new(ErrorKind::WouldBlock, "Would block"));
             }
-            Ok(n_read)
         };
         let mock_io = MockIo::new(reader, writer);
 
