@@ -1,4 +1,4 @@
-use crate::SmdpPacketV1;
+use crate::SmdpPacketV2;
 use crate::error::{Error, SmdpResult};
 use crate::format::{CommandCode, EDX, MIN_PKT_SIZE, PacketFormat, STX};
 use bytes::Bytes;
@@ -252,9 +252,9 @@ where
     }
     /// Private helper for the well-known opcode requests
     fn well_known_opcode_helper(&mut self, addr: u8, code: u8) -> SmdpResult<Vec<u8>> {
-        let v1_pkt = SmdpPacketV1::new(addr, code << 4, vec![]);
+        let v1_pkt = SmdpPacketV2::new(addr, code << 4, vec![]);
         self.write_once(&v1_pkt)?;
-        let resp: SmdpPacketV1 = self.poll_once()?;
+        let resp: SmdpPacketV2 = self.poll_once()?;
 
         // Make sure there are errors in the RSP field
         let resp_result = match resp.rsp()? {
@@ -282,7 +282,7 @@ where
 mod tests {
     use super::*;
     use crate::{
-        format::{SmdpPacketV1, mod256_checksum_split_v1},
+        format::{SmdpPacketV2, mod256_checksum_split_v1},
         test_utils::*,
     };
     use rand::{Rng, thread_rng};
@@ -545,7 +545,7 @@ mod tests {
 
         // Check deserialized packet against frame
         assert!(packet.is_ok());
-        let packet: SmdpPacketV1 = packet.unwrap();
+        let packet: SmdpPacketV2 = packet.unwrap();
         assert_eq!(packet.addr(), addr);
         assert_eq!(packet.cmd_rsp(), cmd_rsp);
         assert_eq!(packet.data(), data);
@@ -566,7 +566,7 @@ mod tests {
         frame.push(EDX);
 
         // Build a packet
-        let packet = SmdpPacketV1::new(addr, cmd_rsp, data.clone());
+        let packet = SmdpPacketV2::new(addr, cmd_rsp, data.clone());
 
         // All value checking should be done in the writer, thats where the serialized bytes will
         // end up. Reader is trivial, it's not being tested.

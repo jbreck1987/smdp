@@ -13,8 +13,8 @@ pub use format::SerizalizePacket;
 pub use parse::Framer;
 
 // Structs
-pub use format::SmdpPacketV1;
 pub use format::SmdpPacketV2;
+pub use format::SmdpPacketV3;
 pub use parse::SmdpPacketHandler;
 
 #[cfg(test)]
