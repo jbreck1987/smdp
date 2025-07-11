@@ -217,34 +217,34 @@ where
         Ok(())
     }
     /// Attempts to poll the slave to return the Sycon product ID, returned as decimal string,
-    /// using the well-known opcode 0x30. Uses V1 format.
+    /// using the well-known opcode 0x30. Uses V2 format.
     pub fn product_id(&mut self, addr: u8) -> SmdpResult<String> {
         let cmd_code: u8 = CommandCode::ProdId.try_into()?;
         let resp = self.well_known_opcode_helper(addr, cmd_code)?;
         Ok(String::from_utf8(resp).map_err(Error::into_parse)?)
     }
     /// Attempts to poll the slave to return its software version, returned as decimal string,
-    /// using the well-known opcode 0x40. Uses V1 format.
+    /// using the well-known opcode 0x40. Uses V2 format.
     pub fn sw_ver(&mut self, addr: u8) -> SmdpResult<String> {
         let cmd_code: u8 = CommandCode::SwVersion.try_into()?;
         let resp = self.well_known_opcode_helper(addr, cmd_code)?;
         Ok(String::from_utf8(resp).map_err(Error::into_parse)?)
     }
-    /// Attempts to instruct slave to reset using the well-known opcode 0x50. Uses V1 format.
+    /// Attempts to instruct slave to reset using the well-known opcode 0x50. Uses V2 format.
     pub fn reset(&mut self, addr: u8) -> SmdpResult<()> {
         let cmd_code: u8 = CommandCode::Reset.try_into()?;
         let _ = self.well_known_opcode_helper(addr, cmd_code)?;
         Ok(())
     }
     /// Acknowledges the receipt of an RSPF bit set from a slave using the well-known opcode 0x60.
-    /// Uses V1 format.
+    /// Uses V2 format.
     pub fn clear_rspf(&mut self, addr: u8) -> SmdpResult<()> {
         let cmd_code: u8 = CommandCode::AckPf.try_into()?;
         let _ = self.well_known_opcode_helper(addr, cmd_code)?;
         Ok(())
     }
     /// Attempts to poll the slave to return its protocl stack version, returned as decimal string,
-    /// using the well-known opcode 0x70. Uses V1 format.
+    /// using the well-known opcode 0x70. Uses V2 format.
     pub fn proto_ver(&mut self, addr: u8) -> SmdpResult<String> {
         let cmd_code: u8 = CommandCode::ProcotolVer.try_into()?;
         let resp = self.well_known_opcode_helper(addr, cmd_code)?;
@@ -252,8 +252,8 @@ where
     }
     /// Private helper for the well-known opcode requests
     fn well_known_opcode_helper(&mut self, addr: u8, code: u8) -> SmdpResult<Vec<u8>> {
-        let v1_pkt = SmdpPacketV2::new(addr, code << 4, vec![]);
-        self.write_once(&v1_pkt)?;
+        let v2_pkt = SmdpPacketV2::new(addr, code << 4, vec![]);
+        self.write_once(&v2_pkt)?;
         let resp: SmdpPacketV2 = self.poll_once()?;
 
         // Make sure there are errors in the RSP field
@@ -282,7 +282,7 @@ where
 mod tests {
     use super::*;
     use crate::{
-        format::{SmdpPacketV2, mod256_checksum_split_v1},
+        format::{SmdpPacketV2, mod256_checksum_split_v2},
         test_utils::*,
     };
     use rand::{Rng, thread_rng};
@@ -525,7 +525,7 @@ mod tests {
         let addr = 0x10u8;
         let cmd_rsp = 0x81u8;
         let data = vec![0x63u8, 0x45, 0x4C, 0x00];
-        let (chk1, chk2) = mod256_checksum_split_v1(&data, addr, cmd_rsp);
+        let (chk1, chk2) = mod256_checksum_split_v2(&data, addr, cmd_rsp);
 
         let mut frame = vec![STX, addr, cmd_rsp];
         frame.extend_from_slice(data.as_ref());
@@ -558,7 +558,7 @@ mod tests {
         let addr = 0x10u8;
         let cmd_rsp = 0x81u8;
         let data = vec![0x63u8, 0x45, 0x4C, 0x00];
-        let (chk1, chk2) = mod256_checksum_split_v1(&data, addr, cmd_rsp);
+        let (chk1, chk2) = mod256_checksum_split_v2(&data, addr, cmd_rsp);
 
         let mut frame = vec![STX, addr, cmd_rsp];
         frame.extend_from_slice(data.as_ref());
