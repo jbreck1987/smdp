@@ -35,19 +35,19 @@ where
             chunk: [0; READ_CHUNK_SIZE],
         }
     }
-    fn poll_once(&mut self) -> SmdpResult<Bytes> {
-        let bytes_read = self.read_frame().map_err(Error::into_parse)?;
+    fn poll_once(&mut self) -> ParseResult<Bytes> {
+        let bytes_read = self.read_frame()?;
         // Attempt to frame bytes that were read
         self.framer
             .push_bytes(&self.read_buf[..bytes_read])
-            .map_err(Error::into_parse)
+            .map_err(|e| ParseError::Framer(e.to_string()))
     }
-    fn poll_once_with_framer<F2: Framer>(&mut self, framer: &mut F2) -> SmdpResult<Bytes> {
-        let bytes_read = self.read_frame().map_err(Error::into_parse)?;
+    fn poll_once_with_framer<F2: Framer>(&mut self, framer: &mut F2) -> ParseResult<Bytes> {
+        let bytes_read = self.read_frame()?;
         // Attempt to frame bytes that were read
         framer
             .push_bytes(&self.read_buf[..bytes_read])
-            .map_err(Error::into_parse)
+            .map_err(|e| ParseError::Framer(e.to_string()))
     }
     // Reads bytes from the low-level I/O handle
     fn read_frame(&mut self) -> ParseResult<usize> {
@@ -86,8 +86,8 @@ where
         Ok(total_bytes_read)
     }
     /// Delegates `write_all` functionality to inner IO handle
-    fn write_all(&mut self, bytes: &[u8]) -> SmdpResult<()> {
-        self.io_handle.write_all(bytes).map_err(Error::into_parse)
+    fn write_all(&mut self, bytes: &[u8]) -> ParseResult<()> {
+        self.io_handle.write_all(bytes).map_err(ParseError::IOError)
     }
 }
 
@@ -110,7 +110,10 @@ where
     /// Attempts to read one SMDP packet from the IO handle after a request using the
     /// default Framer.
     pub fn poll_once<P: PacketFormat>(&mut self) -> SmdpResult<P> {
-        let frame = self.io_handler.poll_once()?;
+        let frame = self.io_handler.poll_once().map_err(|e| match e {
+            ParseError::IOError(e) => Error::into_io(e),
+            err => Error::into_parse(err),
+        })?;
         P::from_bytes(frame.as_ref()).map_err(Error::into_parse)
     }
     /// Attempts to read one SMDP packet from the IO handle after a request using
@@ -119,13 +122,19 @@ where
         &mut self,
         framer: &mut F,
     ) -> SmdpResult<P> {
-        let frame = self.io_handler.poll_once_with_framer(framer)?;
+        let frame = self
+            .io_handler
+            .poll_once_with_framer(framer)
+            .map_err(|e| match e {
+                ParseError::IOError(e) => Error::into_io(e),
+                err => Error::into_parse(err),
+            })?;
         P::from_bytes(frame.as_ref()).map_err(Error::into_parse)
     }
     /// Attempts to write one SMDP packet to the underlying IO handle.
     pub fn write_once<P: PacketFormat>(&mut self, packet: &P) -> SmdpResult<()> {
         let bytes = packet.to_bytes_vec().map_err(Error::into_parse)?;
-        self.io_handler.write_all(&bytes)?;
+        self.io_handler.write_all(&bytes).map_err(Error::into_io)?;
         Ok(())
     }
     /// Attempts to poll the slave to return the Sycon product ID, returned as decimal string,

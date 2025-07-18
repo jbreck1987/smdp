@@ -1,5 +1,4 @@
-mod parse_async;
-pub mod parse_sync;
+mod parse_sync;
 pub use parse_sync::SmdpPacketHandler;
 
 use crate::format::{EDX, MIN_PKT_SIZE, STX};
@@ -24,10 +23,12 @@ pub(crate) enum ParseError {
     #[error("Max frame size overflow, got {recvd}. Max: {max}")]
     MaxSizeOverflow { max: usize, recvd: usize },
     #[error("{0}")]
+    Framer(String),
+    #[error("{0}")]
     InvalidFormat(String),
     #[error("{0}")]
     Other(String),
-    #[error("{0}")]
+    #[error(transparent)]
     IOError(#[from] std::io::Error),
 }
 type ParseResult<T> = Result<T, ParseError>;

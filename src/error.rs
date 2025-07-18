@@ -8,6 +8,7 @@ downcasting.
 pub enum ErrorKind {
     Parse,
     Format,
+    Io,
 }
 #[derive(Debug)]
 pub struct Error {
@@ -42,6 +43,16 @@ impl Error {
     {
         Self {
             kind: ErrorKind::Format,
+            cause: Some(Box::new(err)),
+        }
+    }
+    // Build new Format variant from arbitrary error.
+    pub fn into_io<E>(err: E) -> Self
+    where
+        E: std::error::Error + Send + Sync + 'static,
+    {
+        Self {
+            kind: ErrorKind::Io,
             cause: Some(Box::new(err)),
         }
     }

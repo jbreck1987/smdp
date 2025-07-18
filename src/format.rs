@@ -30,8 +30,6 @@ pub enum FormatError {
     InvalidEscapedVal { recvd: u8 },
     #[error("Invalid SRLNO {recvd}: Valid addresses are 17 - 255")]
     InvalidSrlNo { recvd: u8 },
-    #[error("IO error: {0}")]
-    IoError(#[from] std::io::Error),
     #[error("Checksum Mismatch")]
     ChecksumMismatch,
 }
@@ -249,31 +247,31 @@ impl SerizalizePacket for SmdpPacketV2 {
     fn to_bytes_into(&self, buf: &mut impl std::io::Write) -> Result<(), Self::SerializerError> {
         // Write STX and "header" fields
         buf.write_all(&[self.stx, self.addr, self.cmd_rsp.0])
-            .map_err(Error::into_format)?;
+            .map_err(Error::into_io)?;
 
         // Walk data and escape characters as necessary before writing.
         for b in self.data.iter() {
             match b {
                 0x02 => {
                     buf.write_all(&[ESCAPE_CHAR, HEX_02_ESC])
-                        .map_err(Error::into_format)?;
+                        .map_err(Error::into_io)?;
                 }
                 0x0D => {
                     buf.write_all(&[ESCAPE_CHAR, HEX_0D_ESC])
-                        .map_err(Error::into_format)?;
+                        .map_err(Error::into_io)?;
                 }
                 0x07 => {
                     buf.write_all(&[ESCAPE_CHAR, HEX_07_ESC])
-                        .map_err(Error::into_format)?;
+                        .map_err(Error::into_io)?;
                 }
                 _ => {
-                    buf.write_all(&[*b]).map_err(Error::into_format)?;
+                    buf.write_all(&[*b]).map_err(Error::into_io)?;
                 }
             }
         }
         // Write "Footer" fields and EDX
         buf.write_all(&[self.checksum_1, self.checksum_2, EDX])
-            .map_err(Error::into_format)?;
+            .map_err(Error::into_io)?;
         Ok(())
     }
 }
@@ -415,31 +413,31 @@ impl SerizalizePacket for SmdpPacketV3 {
     fn to_bytes_into(&self, buf: &mut impl std::io::Write) -> Result<(), Self::SerializerError> {
         // Write "header" field
         buf.write_all(&[STX, self.addr, self.cmd_rsp.0])
-            .map_err(Error::into_format)?;
+            .map_err(Error::into_io)?;
 
         // Walk data and escape characters as necessary before writing.
         for b in self.data.iter() {
             match b {
                 0x02 => {
                     buf.write_all(&[ESCAPE_CHAR, HEX_02_ESC])
-                        .map_err(Error::into_format)?;
+                        .map_err(Error::into_io)?;
                 }
                 0x0D => {
                     buf.write_all(&[ESCAPE_CHAR, HEX_0D_ESC])
-                        .map_err(Error::into_format)?;
+                        .map_err(Error::into_io)?;
                 }
                 0x07 => {
                     buf.write_all(&[ESCAPE_CHAR, HEX_07_ESC])
-                        .map_err(Error::into_format)?;
+                        .map_err(Error::into_io)?;
                 }
                 _ => {
-                    buf.write_all(&[*b]).map_err(Error::into_format)?;
+                    buf.write_all(&[*b]).map_err(Error::into_io)?;
                 }
             }
         }
         // Write "Footer" fields and EDX
         buf.write_all(&[self.srlno, self.checksum_1, self.checksum_2, EDX])
-            .map_err(Error::into_format)?;
+            .map_err(Error::into_io)?;
         Ok(())
     }
 }
