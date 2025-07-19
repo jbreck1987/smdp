@@ -4,7 +4,7 @@ In this model, all errors are Opaque and associated errors can be accessed by
 downcasting.
 */
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ErrorKind {
     Parse,
     Format,
@@ -61,6 +61,12 @@ impl Error {
     }
     pub fn is_format(&self) -> bool {
         self.kind == ErrorKind::Format
+    }
+    pub fn is_io(&self) -> bool {
+        self.kind == ErrorKind::Format
+    }
+    pub fn kind(&self) -> ErrorKind {
+        self.kind.clone()
     }
 }
 impl std::error::Error for Error {
