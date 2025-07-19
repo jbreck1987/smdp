@@ -1,7 +1,9 @@
+/* Handles both versions of the SMDP frame formatting */
+
 use crate::error::{Error, SmdpResult};
 use bitfield::{Bit, BitRange};
 use bytes::{Buf, BytesMut};
-use std::io::Write;
+use std::{fmt::Display, io::Write};
 use thiserror;
 
 // Since the protocol is binary transparent, STX and carriage
@@ -30,8 +32,6 @@ pub enum FormatError {
     InvalidEscapedVal { recvd: u8 },
     #[error("Invalid SRLNO {recvd}: Valid addresses are 17 - 255")]
     InvalidSrlNo { recvd: u8 },
-    #[error("IO error: {0}")]
-    IoError(#[from] std::io::Error),
     #[error("Checksum Mismatch")]
     ChecksumMismatch,
 }
@@ -91,6 +91,20 @@ impl TryFrom<u8> for ResponseCode {
             _ => return Err(Error::into_format(FormatError::InvalidRsp)),
         };
         Ok(res)
+    }
+}
+impl Display for ResponseCode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            ResponseCode::Ok => "Ok",
+            ResponseCode::ErrInvalidCmd => "Invalid Command",
+            ResponseCode::ErrSyntax => "Invalid syntax",
+            ResponseCode::ErrRange => "Data range error",
+            ResponseCode::ErrInhibited => "Inhibited",
+            ResponseCode::ErrObsolete => "Obsolete Command",
+            ResponseCode::Reserved => "Reserved response code value",
+        };
+        write!(f, "{s}")
     }
 }
 
@@ -249,31 +263,31 @@ impl SerizalizePacket for SmdpPacketV2 {
     fn to_bytes_into(&self, buf: &mut impl std::io::Write) -> Result<(), Self::SerializerError> {
         // Write STX and "header" fields
         buf.write_all(&[self.stx, self.addr, self.cmd_rsp.0])
-            .map_err(Error::into_format)?;
+            .map_err(Error::into_io)?;
 
         // Walk data and escape characters as necessary before writing.
         for b in self.data.iter() {
             match b {
                 0x02 => {
                     buf.write_all(&[ESCAPE_CHAR, HEX_02_ESC])
-                        .map_err(Error::into_format)?;
+                        .map_err(Error::into_io)?;
                 }
                 0x0D => {
                     buf.write_all(&[ESCAPE_CHAR, HEX_0D_ESC])
-                        .map_err(Error::into_format)?;
+                        .map_err(Error::into_io)?;
                 }
                 0x07 => {
                     buf.write_all(&[ESCAPE_CHAR, HEX_07_ESC])
-                        .map_err(Error::into_format)?;
+                        .map_err(Error::into_io)?;
                 }
                 _ => {
-                    buf.write_all(&[*b]).map_err(Error::into_format)?;
+                    buf.write_all(&[*b]).map_err(Error::into_io)?;
                 }
             }
         }
         // Write "Footer" fields and EDX
         buf.write_all(&[self.checksum_1, self.checksum_2, EDX])
-            .map_err(Error::into_format)?;
+            .map_err(Error::into_io)?;
         Ok(())
     }
 }
@@ -415,31 +429,31 @@ impl SerizalizePacket for SmdpPacketV3 {
     fn to_bytes_into(&self, buf: &mut impl std::io::Write) -> Result<(), Self::SerializerError> {
         // Write "header" field
         buf.write_all(&[STX, self.addr, self.cmd_rsp.0])
-            .map_err(Error::into_format)?;
+            .map_err(Error::into_io)?;
 
         // Walk data and escape characters as necessary before writing.
         for b in self.data.iter() {
             match b {
                 0x02 => {
                     buf.write_all(&[ESCAPE_CHAR, HEX_02_ESC])
-                        .map_err(Error::into_format)?;
+                        .map_err(Error::into_io)?;
                 }
                 0x0D => {
                     buf.write_all(&[ESCAPE_CHAR, HEX_0D_ESC])
-                        .map_err(Error::into_format)?;
+                        .map_err(Error::into_io)?;
                 }
                 0x07 => {
                     buf.write_all(&[ESCAPE_CHAR, HEX_07_ESC])
-                        .map_err(Error::into_format)?;
+                        .map_err(Error::into_io)?;
                 }
                 _ => {
-                    buf.write_all(&[*b]).map_err(Error::into_format)?;
+                    buf.write_all(&[*b]).map_err(Error::into_io)?;
                 }
             }
         }
         // Write "Footer" fields and EDX
         buf.write_all(&[self.srlno, self.checksum_1, self.checksum_2, EDX])
-            .map_err(Error::into_format)?;
+            .map_err(Error::into_io)?;
         Ok(())
     }
 }

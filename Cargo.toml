@@ -12,3 +12,4 @@ bitfield = "0.19.1"
 bytes = "1.10.1"
 serialport = "4.7.2"
 thiserror = "2.0.12"
+tokio = {version="1.46.1", features=["io-std", "io-util", "rt"]}

@@ -1,13 +1,14 @@
 /*
 Defines the public facing Error type. Following the Hyper error model.
-In this model, all errors are Opaque and associated errors can be accessed by
+In this model, Error is opaque and boxed errors can be accessed by
 downcasting.
 */
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ErrorKind {
     Parse,
     Format,
+    Io,
 }
 #[derive(Debug)]
 pub struct Error {
@@ -45,11 +46,27 @@ impl Error {
             cause: Some(Box::new(err)),
         }
     }
+    // Build new Format variant from arbitrary error.
+    pub fn into_io<E>(err: E) -> Self
+    where
+        E: std::error::Error + Send + Sync + 'static,
+    {
+        Self {
+            kind: ErrorKind::Io,
+            cause: Some(Box::new(err)),
+        }
+    }
     pub fn is_parse(&self) -> bool {
         self.kind == ErrorKind::Parse
     }
     pub fn is_format(&self) -> bool {
         self.kind == ErrorKind::Format
+    }
+    pub fn is_io(&self) -> bool {
+        self.kind == ErrorKind::Format
+    }
+    pub fn kind(&self) -> ErrorKind {
+        self.kind.clone()
     }
 }
 impl std::error::Error for Error {

@@ -1,100 +1,12 @@
+use super::*;
 use crate::SmdpPacketV2;
 use crate::error::{Error, SmdpResult};
-use crate::format::{CommandCode, EDX, MIN_PKT_SIZE, PacketFormat, STX};
+use crate::format::{CommandCode, PacketFormat, ResponseCode};
 use bytes::Bytes;
 use std::{
     io::{ErrorKind, Read, Write},
     time::{Duration, Instant},
 };
-use thiserror;
-
-const READ_CHUNK_SIZE: usize = 512;
-
-/// Required methods for a Framer. Primarily used for testing.
-pub trait Framer {
-    type Error: std::error::Error + Send + Sync + 'static;
-
-    /// Push bytes into Framer buffer for framing. Syncon is request/response, so
-    /// there should only ever be one response frame per request.
-    fn push_bytes(&mut self, data: &[u8]) -> Result<Bytes, Self::Error>;
-}
-
-#[derive(Debug, thiserror::Error)]
-pub(crate) enum ParseError {
-    #[error("Frame too small, got {size} bytes. Min: {}", MIN_PKT_SIZE)]
-    FrameTooSmall { size: u8 },
-    #[error("Max frame size overflow, got {recvd}. Max: {max}")]
-    MaxSizeOverflow { max: usize, recvd: usize },
-    #[error("{0}")]
-    InvalidFormat(String),
-    #[error("{0}")]
-    Other(String),
-    #[error("{0}")]
-    IOError(#[from] std::io::Error),
-}
-type ParseResult<T> = Result<T, ParseError>;
-/// Handles the framing logic for the SMDP protocol. The framer validates
-/// the structure of a stream of bytes and extracts a candidate packet, it does no parsing
-/// of fields (E.g. will not verify checksum).
-#[derive(Debug, PartialEq, Clone)]
-pub(crate) struct SmdpFramer {
-    // Buffer that holds incoming bytes from the reader.
-    buf: Vec<u8>,
-}
-impl SmdpFramer {
-    pub(crate) fn new(max_size: usize) -> Self {
-        Self {
-            buf: Vec::with_capacity(max_size),
-        }
-    }
-}
-impl Framer for SmdpFramer {
-    type Error = ParseError;
-
-    fn push_bytes(&mut self, data: &[u8]) -> ParseResult<Bytes> {
-        self.buf.clear();
-        if data.len() == 0 {
-            return Err(ParseError::FrameTooSmall { size: 0 });
-        }
-        // Look for STX:
-        // If at least one found, find pos of STX with the highest idx.
-        // If none found, return InvalidFormat.
-        let stx_pos = data
-            .iter()
-            .rposition(|b| *b == STX)
-            .ok_or(ParseError::InvalidFormat("STX not found".to_owned()))?;
-
-        // Look for EDX starting from idx after the stx position:
-        // If at least one found, find pos of EDX with the lowest idx. Append data from [STX, EDX].
-        // If this would cause an overflow, return MaxSizeOverflow. If none found, return InvalidFormat.
-        let edx_pos = data[stx_pos + 1..]
-            .iter()
-            .position(|b| *b == EDX)
-            .ok_or(ParseError::InvalidFormat("EDX not found".to_owned()))?
-            + (stx_pos + 1);
-
-        if data[stx_pos..=edx_pos].len() <= self.buf.capacity() {
-            self.buf.extend_from_slice(&data[stx_pos..=edx_pos]);
-        } else {
-            return Err(ParseError::MaxSizeOverflow {
-                max: self.buf.capacity(),
-                recvd: data[stx_pos..=edx_pos].len(),
-            });
-        }
-
-        // Check for min length. If too small, clear buffer and return FrameTooSmall. Otherwise
-        // return valid frame.
-        if self.buf.len() < MIN_PKT_SIZE {
-            let buf_len = self.buf.len();
-            self.buf.clear();
-            return Err(ParseError::FrameTooSmall {
-                size: buf_len as u8,
-            });
-        } else {
-            Ok(Bytes::copy_from_slice(&self.buf))
-        }
-    }
-}
 
 /// Manages reading/writing bytes to/from IO and delegate reads to protocol framer.
 /// Only uses the basic Read/Write API, customization is up to the caller.
@@ -102,7 +14,8 @@ impl Framer for SmdpFramer {
 struct SmdpIoHandler<T: Read + Write, F: Framer> {
     io_handle: T,
     framer: F,
-    // Timeout for one read operation in milliseconds.
+    /// Timeout for one read operation in milliseconds. This is the primary value that affects the responsiveness
+    /// of the handler.
     read_timeout_ms: Duration,
     // Read buffer
     read_buf: Vec<u8>,
@@ -123,19 +36,21 @@ where
             chunk: [0; READ_CHUNK_SIZE],
         }
     }
-    fn poll_once(&mut self) -> SmdpResult<Bytes> {
-        let bytes_read = self.read_frame().map_err(Error::into_parse)?;
+    /// Read bytes into buffer until timeout.
+    fn poll_once(&mut self) -> ParseResult<Bytes> {
+        let bytes_read = self.read_frame()?;
         // Attempt to frame bytes that were read
         self.framer
             .push_bytes(&self.read_buf[..bytes_read])
-            .map_err(Error::into_parse)
+            .map_err(|e| ParseError::Framer(e.to_string()))
     }
-    fn poll_once_with_framer<F2: Framer>(&mut self, framer: &mut F2) -> SmdpResult<Bytes> {
-        let bytes_read = self.read_frame().map_err(Error::into_parse)?;
+    /// Read bytes into buffer until timeout with custom framer.
+    fn poll_once_with_framer<F2: Framer>(&mut self, framer: &mut F2) -> ParseResult<Bytes> {
+        let bytes_read = self.read_frame()?;
         // Attempt to frame bytes that were read
         framer
             .push_bytes(&self.read_buf[..bytes_read])
-            .map_err(Error::into_parse)
+            .map_err(|e| ParseError::Framer(e.to_string()))
     }
     // Reads bytes from the low-level I/O handle
     fn read_frame(&mut self) -> ParseResult<usize> {
@@ -164,7 +79,7 @@ where
                 }
                 // Chunk read blocked, continue to next chunk read
                 Err(ref e) if e.kind() == ErrorKind::WouldBlock => continue,
-                // In case the handler does not send EOF appropriately
+                // In case the low-level handler does not send EOF appropriately
                 Err(ref e) if e.kind() == ErrorKind::TimedOut => continue,
                 Err(e) => {
                     return Err(ParseError::IOError(e));
@@ -174,12 +89,13 @@ where
         Ok(total_bytes_read)
     }
     /// Delegates `write_all` functionality to inner IO handle
-    fn write_all(&mut self, bytes: &[u8]) -> SmdpResult<()> {
-        self.io_handle.write_all(bytes).map_err(Error::into_parse)
+    fn write_all(&mut self, bytes: &[u8]) -> ParseResult<()> {
+        self.io_handle.write_all(bytes).map_err(ParseError::IOError)
     }
 }
 
-/// Packages all the individual components to go to/from the IO from/to serialized SmdpPacket.
+/// Packages all the individual components to go to/from the IO from/to serialized SmdpPacket
+/// using the default framer.
 #[derive(Debug)]
 pub struct SmdpPacketHandler<T: Read + Write> {
     io_handler: SmdpIoHandler<T, SmdpFramer>,
@@ -198,7 +114,10 @@ where
     /// Attempts to read one SMDP packet from the IO handle after a request using the
     /// default Framer.
     pub fn poll_once<P: PacketFormat>(&mut self) -> SmdpResult<P> {
-        let frame = self.io_handler.poll_once()?;
+        let frame = self.io_handler.poll_once().map_err(|e| match e {
+            ParseError::IOError(e) => Error::into_io(e),
+            err => Error::into_parse(err),
+        })?;
         P::from_bytes(frame.as_ref()).map_err(Error::into_parse)
     }
     /// Attempts to read one SMDP packet from the IO handle after a request using
@@ -207,13 +126,19 @@ where
         &mut self,
         framer: &mut F,
     ) -> SmdpResult<P> {
-        let frame = self.io_handler.poll_once_with_framer(framer)?;
+        let frame = self
+            .io_handler
+            .poll_once_with_framer(framer)
+            .map_err(|e| match e {
+                ParseError::IOError(e) => Error::into_io(e),
+                err => Error::into_parse(err),
+            })?;
         P::from_bytes(frame.as_ref()).map_err(Error::into_parse)
     }
     /// Attempts to write one SMDP packet to the underlying IO handle.
     pub fn write_once<P: PacketFormat>(&mut self, packet: &P) -> SmdpResult<()> {
         let bytes = packet.to_bytes_vec().map_err(Error::into_parse)?;
-        self.io_handler.write_all(&bytes)?;
+        self.io_handler.write_all(&bytes).map_err(Error::into_io)?;
         Ok(())
     }
     /// Attempts to poll the slave to return the Sycon product ID, returned as decimal string,
@@ -255,23 +180,12 @@ where
         let v2_pkt = SmdpPacketV2::new(addr, code << 4, vec![]);
         self.write_once(&v2_pkt)?;
         let resp: SmdpPacketV2 = self.poll_once()?;
-
-        // Make sure there are errors in the RSP field
-        let resp_result = match resp.rsp()? {
-            crate::format::ResponseCode::Ok => Ok(()),
-            crate::format::ResponseCode::ErrInvalidCmd => Err("Invalid command"),
-            crate::format::ResponseCode::ErrSyntax => Err("Syntax error"),
-            crate::format::ResponseCode::ErrRange => Err("Range error"),
-            crate::format::ResponseCode::ErrInhibited => Err("Inhibited"),
-            crate::format::ResponseCode::ErrObsolete => Err("Obsolete comand"),
-            crate::format::ResponseCode::Reserved => Err("Rsp value 0x00 is reserved"),
-        };
-        match resp_result {
-            Ok(_) => Ok(resp.data().to_vec()),
-            Err(e) => {
-                return Err(Error::into_parse(ParseError::Other(format!(
+        match resp.rsp()? {
+            ResponseCode::Ok => Ok(resp.data().to_vec()),
+            other => {
+                return Err(Error::into_parse(ParseError::InvalidFormat(format!(
                     "Received non-OK RSP value in response: {}",
-                    e
+                    other
                 ))));
             }
         }
