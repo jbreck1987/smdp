@@ -1,6 +1,6 @@
 /*
 Defines the public facing Error type. Following the Hyper error model.
-In this model, all errors are Opaque and associated errors can be accessed by
+In this model, Error is opaque and boxed errors can be accessed by
 downcasting.
 */
 

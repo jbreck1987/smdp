@@ -1,7 +1,9 @@
+/* Handles both versions of the SMDP frame formatting */
+
 use crate::error::{Error, SmdpResult};
 use bitfield::{Bit, BitRange};
 use bytes::{Buf, BytesMut};
-use std::io::Write;
+use std::{fmt::Display, io::Write};
 use thiserror;
 
 // Since the protocol is binary transparent, STX and carriage
@@ -89,6 +91,20 @@ impl TryFrom<u8> for ResponseCode {
             _ => return Err(Error::into_format(FormatError::InvalidRsp)),
         };
         Ok(res)
+    }
+}
+impl Display for ResponseCode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            ResponseCode::Ok => "Ok",
+            ResponseCode::ErrInvalidCmd => "Invalid Command",
+            ResponseCode::ErrSyntax => "Invalid syntax",
+            ResponseCode::ErrRange => "Data range error",
+            ResponseCode::ErrInhibited => "Inhibited",
+            ResponseCode::ErrObsolete => "Obsolete Command",
+            ResponseCode::Reserved => "Reserved response code value",
+        };
+        write!(f, "{s}")
     }
 }
 

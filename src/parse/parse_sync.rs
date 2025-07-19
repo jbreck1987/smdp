@@ -1,7 +1,7 @@
 use super::*;
 use crate::SmdpPacketV2;
 use crate::error::{Error, SmdpResult};
-use crate::format::{CommandCode, PacketFormat};
+use crate::format::{CommandCode, PacketFormat, ResponseCode};
 use bytes::Bytes;
 use std::{
     io::{ErrorKind, Read, Write},
@@ -14,7 +14,8 @@ use std::{
 struct SmdpIoHandler<T: Read + Write, F: Framer> {
     io_handle: T,
     framer: F,
-    // Timeout for one read operation in milliseconds.
+    /// Timeout for one read operation in milliseconds. This is the primary value that affects the responsiveness
+    /// of the handler.
     read_timeout_ms: Duration,
     // Read buffer
     read_buf: Vec<u8>,
@@ -35,6 +36,7 @@ where
             chunk: [0; READ_CHUNK_SIZE],
         }
     }
+    /// Read bytes into buffer until timeout.
     fn poll_once(&mut self) -> ParseResult<Bytes> {
         let bytes_read = self.read_frame()?;
         // Attempt to frame bytes that were read
@@ -42,6 +44,7 @@ where
             .push_bytes(&self.read_buf[..bytes_read])
             .map_err(|e| ParseError::Framer(e.to_string()))
     }
+    /// Read bytes into buffer until timeout with custom framer.
     fn poll_once_with_framer<F2: Framer>(&mut self, framer: &mut F2) -> ParseResult<Bytes> {
         let bytes_read = self.read_frame()?;
         // Attempt to frame bytes that were read
@@ -76,7 +79,7 @@ where
                 }
                 // Chunk read blocked, continue to next chunk read
                 Err(ref e) if e.kind() == ErrorKind::WouldBlock => continue,
-                // In case the handler does not send EOF appropriately
+                // In case the low-level handler does not send EOF appropriately
                 Err(ref e) if e.kind() == ErrorKind::TimedOut => continue,
                 Err(e) => {
                     return Err(ParseError::IOError(e));
@@ -91,7 +94,8 @@ where
     }
 }
 
-/// Packages all the individual components to go to/from the IO from/to serialized SmdpPacket.
+/// Packages all the individual components to go to/from the IO from/to serialized SmdpPacket
+/// using the default framer.
 #[derive(Debug)]
 pub struct SmdpPacketHandler<T: Read + Write> {
     io_handler: SmdpIoHandler<T, SmdpFramer>,
@@ -176,23 +180,12 @@ where
         let v2_pkt = SmdpPacketV2::new(addr, code << 4, vec![]);
         self.write_once(&v2_pkt)?;
         let resp: SmdpPacketV2 = self.poll_once()?;
-
-        // Make sure there are errors in the RSP field
-        let resp_result = match resp.rsp()? {
-            crate::format::ResponseCode::Ok => Ok(()),
-            crate::format::ResponseCode::ErrInvalidCmd => Err("Invalid command"),
-            crate::format::ResponseCode::ErrSyntax => Err("Syntax error"),
-            crate::format::ResponseCode::ErrRange => Err("Range error"),
-            crate::format::ResponseCode::ErrInhibited => Err("Inhibited"),
-            crate::format::ResponseCode::ErrObsolete => Err("Obsolete comand"),
-            crate::format::ResponseCode::Reserved => Err("Rsp value 0x00 is reserved"),
-        };
-        match resp_result {
-            Ok(_) => Ok(resp.data().to_vec()),
-            Err(e) => {
-                return Err(Error::into_parse(ParseError::Other(format!(
+        match resp.rsp()? {
+            ResponseCode::Ok => Ok(resp.data().to_vec()),
+            other => {
+                return Err(Error::into_parse(ParseError::InvalidFormat(format!(
                     "Received non-OK RSP value in response: {}",
-                    e
+                    other
                 ))));
             }
         }

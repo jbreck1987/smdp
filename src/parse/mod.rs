@@ -32,6 +32,7 @@ pub(crate) enum ParseError {
     IOError(#[from] std::io::Error),
 }
 type ParseResult<T> = Result<T, ParseError>;
+
 /// Handles the framing logic for the SMDP protocol. The framer validates
 /// the structure of a stream of bytes and extracts a candidate packet, it does no parsing
 /// of fields (E.g. will not verify checksum).
