@@ -324,13 +324,12 @@ impl DeserializePacket for SmdpPacketV2 {
             return Err(Error::into_format(FormatError::InvalidRsp));
         }
         // Unescape Data field
-        let mut data: Vec<u8> = Vec::with_capacity(buf.remaining() - 2);
-        let mut escaped = false;
+        let mut unesc_data: Vec<u8> = Vec::with_capacity(buf.remaining() - 2);
         while buf.remaining() > 3 {
             // 3 => two checksum bytes + EDX
             let mut curr_byte = buf.get_u8();
-            if escaped {
-                curr_byte = match curr_byte {
+            if curr_byte == ESCAPE_CHAR {
+                curr_byte = match buf.get_u8() {
                     HEX_02_ESC => 0x02,
                     HEX_07_ESC => 0x07,
                     HEX_0D_ESC => 0x0D,
@@ -340,21 +339,16 @@ impl DeserializePacket for SmdpPacketV2 {
                         }));
                     }
                 };
-                escaped = false;
             }
-            if !escaped && curr_byte == ESCAPE_CHAR {
-                escaped = true;
-                continue;
-            }
-            data.push(curr_byte);
+            unesc_data.push(curr_byte);
         }
         // Verify checksum. Should be exactly 3 bytes remaining.
-        if (buf.get_u8(), buf.get_u8()) != mod256_checksum_split_v2(&data, addr, cmd_rsp) {
+        if (buf.get_u8(), buf.get_u8()) != mod256_checksum_split_v2(&unesc_data, addr, cmd_rsp) {
             return Err(Error::into_format(FormatError::ChecksumMismatch));
         }
 
         // Deserialize into packet struct
-        Ok(SmdpPacketV2::new(addr, cmd_rsp, data))
+        Ok(SmdpPacketV2::new(addr, cmd_rsp, unesc_data))
     }
 }
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -491,12 +485,11 @@ impl DeserializePacket for SmdpPacketV3 {
         }
         // Unescape Data field. Reserving the maximum capacity (I.E. every byte is escaped)
         let mut unesc_data: Vec<u8> = Vec::with_capacity(buf.remaining() - 3);
-        let mut escaped = false;
         while buf.remaining() > 4 {
             // 4 => srlno + two checksum bytes + EDX
             let mut curr_byte = buf.get_u8();
-            if escaped {
-                curr_byte = match curr_byte {
+            if curr_byte == ESCAPE_CHAR {
+                curr_byte = match buf.get_u8() {
                     HEX_02_ESC => 0x02,
                     HEX_07_ESC => 0x07,
                     HEX_0D_ESC => 0x0D,
@@ -506,11 +499,6 @@ impl DeserializePacket for SmdpPacketV3 {
                         }));
                     }
                 };
-                escaped = false;
-            }
-            if !escaped && curr_byte == ESCAPE_CHAR {
-                escaped = true;
-                continue;
             }
             unesc_data.push(curr_byte);
         }
