@@ -2,18 +2,22 @@ mod parse_sync;
 pub use parse_sync::SmdpPacketHandler;
 
 use crate::format::{EDX, MIN_PKT_SIZE, STX};
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 use thiserror;
 
 const READ_CHUNK_SIZE: usize = 512;
 
 /// Required methods for a Framer. Primarily used for testing.
+///
+/// Framers accumulate bytes across calls and return `Ok(Some(frame))` once a
+/// complete frame is detected, or `Ok(None)` when more data is needed.
+/// This follows the same pattern as `tokio_util::codec::Decoder::decode`.
 pub trait Framer {
     type Error: std::error::Error + Send + Sync + 'static;
 
-    /// Push bytes into Framer buffer for framing. Syncon is request/response, so
-    /// there should only ever be one response frame per request.
-    fn push_bytes(&mut self, data: &[u8]) -> Result<Bytes, Self::Error>;
+    /// Push bytes into the framer's internal buffer. Returns `Ok(Some(frame))`
+    /// when a complete frame is found, `Ok(None)` when more data is needed.
+    fn push_bytes(&mut self, data: &[u8]) -> Result<Option<Bytes>, Self::Error>;
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -33,65 +37,67 @@ pub(crate) enum ParseError {
 }
 type ParseResult<T> = Result<T, ParseError>;
 
-/// Handles the framing logic for the SMDP protocol. The framer validates
-/// the structure of a stream of bytes and extracts a candidate packet, it does no parsing
-/// of fields (E.g. will not verify checksum).
-#[derive(Debug, PartialEq, Clone)]
+/// Handles the framing logic for the SMDP protocol. The framer accumulates
+/// bytes across calls via an internal `BytesMut` buffer and extracts a candidate
+/// packet once both STX and EDX delimiters are present. It does no parsing
+/// of fields (e.g. will not verify checksum).
+#[derive(Debug, Clone)]
 pub(crate) struct SmdpFramer {
-    // Buffer that holds incoming bytes from the reader.
-    buf: Vec<u8>,
+    buf: BytesMut,
+    max_size: usize,
 }
 impl SmdpFramer {
     pub(crate) fn new(max_size: usize) -> Self {
         Self {
-            buf: Vec::with_capacity(max_size),
+            buf: BytesMut::with_capacity(max_size),
+            max_size,
         }
     }
 }
 impl Framer for SmdpFramer {
     type Error = ParseError;
 
-    fn push_bytes(&mut self, data: &[u8]) -> ParseResult<Bytes> {
-        self.buf.clear();
-        if data.len() == 0 {
-            return Err(ParseError::FrameTooSmall { size: 0 });
-        }
-        // Look for STX:
-        // If at least one found, find pos of STX with the highest idx.
-        // If none found, return InvalidFormat.
-        let stx_pos = data
-            .iter()
-            .rposition(|b| *b == STX)
-            .ok_or(ParseError::InvalidFormat("STX not found".to_owned()))?;
+    fn push_bytes(&mut self, data: &[u8]) -> ParseResult<Option<Bytes>> {
+        self.buf.extend_from_slice(data);
 
-        // Look for EDX starting from idx after the stx position:
-        // If at least one found, find pos of EDX with the lowest idx. Append data from [STX, EDX].
-        // If this would cause an overflow, return MaxSizeOverflow. If none found, return InvalidFormat.
-        let edx_pos = data[stx_pos + 1..]
-            .iter()
-            .position(|b| *b == EDX)
-            .ok_or(ParseError::InvalidFormat("EDX not found".to_owned()))?
-            + (stx_pos + 1);
-
-        if data[stx_pos..=edx_pos].len() <= self.buf.capacity() {
-            self.buf.extend_from_slice(&data[stx_pos..=edx_pos]);
-        } else {
-            return Err(ParseError::MaxSizeOverflow {
-                max: self.buf.capacity(),
-                recvd: data[stx_pos..=edx_pos].len(),
-            });
-        }
-
-        // Check for min length. If too small, clear buffer and return FrameTooSmall. Otherwise
-        // return valid frame.
-        if self.buf.len() < MIN_PKT_SIZE {
-            let buf_len = self.buf.len();
+        if self.buf.len() > self.max_size {
+            let recvd = self.buf.len();
             self.buf.clear();
-            return Err(ParseError::FrameTooSmall {
-                size: buf_len as u8,
+            return Err(ParseError::MaxSizeOverflow {
+                max: self.max_size,
+                recvd,
             });
-        } else {
-            Ok(Bytes::copy_from_slice(&self.buf))
         }
+
+        // Find latest STX (handles garbage/retransmits before the real frame)
+        let Some(stx_pos) = self.buf.iter().rposition(|b| *b == STX) else {
+            // No STX yet — discard everything
+            self.buf.clear();
+            return Ok(None);
+        };
+
+        // Find first EDX after that STX
+        let Some(edx_offset) = self.buf[stx_pos + 1..].iter().position(|b| *b == EDX) else {
+            // Have STX but no EDX yet — discard pre-STX garbage, wait for more
+            if stx_pos > 0 {
+                let _ = self.buf.split_to(stx_pos);
+            }
+            return Ok(None);
+        };
+        let edx_pos = stx_pos + 1 + edx_offset;
+        let frame_len = edx_pos - stx_pos + 1;
+
+        if frame_len < MIN_PKT_SIZE {
+            // Discard the malformed frame
+            let _ = self.buf.split_to(edx_pos + 1);
+            return Err(ParseError::FrameTooSmall {
+                size: frame_len as u8,
+            });
+        }
+
+        // Discard pre-frame garbage, extract the frame
+        let _ = self.buf.split_to(stx_pos);
+        let frame = self.buf.split_to(frame_len).freeze();
+        Ok(Some(frame))
     }
 }

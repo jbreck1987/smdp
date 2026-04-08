@@ -10,12 +10,12 @@ pub(crate) fn make_framer() -> SmdpFramer {
     SmdpFramer::new(1024)
 }
 #[derive(Debug)]
-pub(crate) struct MockFramer<F: Fn(&[u8]) -> SmdpResult<Bytes>> {
+pub(crate) struct MockFramer<F: Fn(&[u8]) -> SmdpResult<Option<Bytes>>> {
     f: F,
 }
 impl<F> MockFramer<F>
 where
-    F: Fn(&[u8]) -> SmdpResult<Bytes>,
+    F: Fn(&[u8]) -> SmdpResult<Option<Bytes>>,
 {
     pub(crate) fn new(f: F) -> Self {
         Self { f }
@@ -23,10 +23,10 @@ where
 }
 impl<F> Framer for MockFramer<F>
 where
-    F: Fn(&[u8]) -> SmdpResult<Bytes>,
+    F: Fn(&[u8]) -> SmdpResult<Option<Bytes>>,
 {
     type Error = Error;
-    fn push_bytes(&mut self, data: &[u8]) -> SmdpResult<Bytes> {
+    fn push_bytes(&mut self, data: &[u8]) -> SmdpResult<Option<Bytes>> {
         (self.f)(data)
     }
 }
