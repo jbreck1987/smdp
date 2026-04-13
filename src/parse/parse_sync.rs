@@ -8,18 +8,20 @@ use std::{
     time::{Duration, Instant},
 };
 
-/// Manages reading/writing bytes to/from IO and delegate reads to protocol framer.
+/// Manages reading/writing bytes to/from IO and delegates reads to protocol framer.
 /// Only uses the basic Read/Write API, customization is up to the caller.
+///
+/// The framer accumulates bytes across chunk reads and signals completion as soon
+/// as a full frame is detected, so the read timeout is a ceiling for error cases
+/// rather than the expected read duration.
 #[derive(Debug)]
 struct SmdpIoHandler<T: Read + Write, F: Framer> {
     io_handle: T,
     framer: F,
-    /// Timeout for one read operation in milliseconds. This is the primary value that affects the responsiveness
-    /// of the handler.
+    /// Maximum time to wait for a complete frame. Successful reads return as
+    /// soon as the framer detects a complete STX...EDX frame.
     read_timeout_ms: Duration,
-    // Read buffer
-    read_buf: Vec<u8>,
-    // Chunk buffer
+    // Chunk buffer for individual reads
     chunk: [u8; READ_CHUNK_SIZE],
 }
 impl<T, F> SmdpIoHandler<T, F>
@@ -27,66 +29,52 @@ where
     T: Read + Write,
     F: Framer,
 {
-    fn new(io_handle: T, framer: F, read_timeout_ms: usize, max_frame_size: usize) -> Self {
+    fn new(io_handle: T, framer: F, read_timeout_ms: usize) -> Self {
         Self {
             io_handle,
             framer,
             read_timeout_ms: Duration::from_millis(read_timeout_ms as u64),
-            read_buf: vec![0; max_frame_size],
             chunk: [0; READ_CHUNK_SIZE],
         }
     }
-    /// Read bytes into buffer until timeout.
+    /// Read bytes and push them to the framer until a complete frame is found
+    /// or the timeout expires.
     fn poll_once(&mut self) -> ParseResult<Bytes> {
-        let bytes_read = self.read_frame()?;
-        // Attempt to frame bytes that were read
-        self.framer
-            .push_bytes(&self.read_buf[..bytes_read])
-            .map_err(|e| ParseError::Framer(e.to_string()))
+        self.poll_loop(&mut None::<&mut F>)
     }
-    /// Read bytes into buffer until timeout with custom framer.
+    /// Read bytes and push them to a caller-supplied framer until a complete frame
+    /// is found or the timeout expires.
     fn poll_once_with_framer<F2: Framer>(&mut self, framer: &mut F2) -> ParseResult<Bytes> {
-        let bytes_read = self.read_frame()?;
-        // Attempt to frame bytes that were read
-        framer
-            .push_bytes(&self.read_buf[..bytes_read])
-            .map_err(|e| ParseError::Framer(e.to_string()))
+        self.poll_loop(&mut Some(framer))
     }
-    // Reads bytes from the low-level I/O handle
-    fn read_frame(&mut self) -> ParseResult<usize> {
-        self.read_buf.fill(0);
+    /// Shared read loop. Pushes each chunk to either the caller-supplied framer
+    /// or the internal one, returning as soon as a complete frame is detected.
+    fn poll_loop<F2: Framer>(&mut self, ext_framer: &mut Option<&mut F2>) -> ParseResult<Bytes> {
         let timer = Instant::now();
-        let mut total_bytes_read = 0usize;
 
-        // Canonical chunked read loop
         while timer.elapsed() < self.read_timeout_ms {
             match self.io_handle.read(&mut self.chunk) {
-                // EOF reached
                 Ok(0) => break,
                 Ok(n_read) => {
-                    if let Some(buf_slice) = self
-                        .read_buf
-                        .get_mut(total_bytes_read..total_bytes_read + n_read)
-                    {
-                        buf_slice.copy_from_slice(&self.chunk[..n_read]);
-                        total_bytes_read += n_read;
+                    let result = if let Some(f) = ext_framer {
+                        f.push_bytes(&self.chunk[..n_read])
+                            .map_err(|e| ParseError::Framer(e.to_string()))
                     } else {
-                        return Err(ParseError::MaxSizeOverflow {
-                            max: self.read_buf.capacity(),
-                            recvd: total_bytes_read + n_read,
-                        });
+                        self.framer
+                            .push_bytes(&self.chunk[..n_read])
+                            .map_err(|e| ParseError::Framer(e.to_string()))
+                    };
+                    match result? {
+                        Some(frame) => return Ok(frame),
+                        None => continue,
                     }
                 }
-                // Chunk read blocked, continue to next chunk read
                 Err(ref e) if e.kind() == ErrorKind::WouldBlock => continue,
-                // In case the low-level handler does not send EOF appropriately
                 Err(ref e) if e.kind() == ErrorKind::TimedOut => continue,
-                Err(e) => {
-                    return Err(ParseError::IOError(e));
-                }
+                Err(e) => return Err(ParseError::IOError(e)),
             }
         }
-        Ok(total_bytes_read)
+        Err(ParseError::Framer("Read timed out waiting for complete frame".to_owned()))
     }
     /// Delegates `write_all` functionality to inner IO handle
     fn write_all(&mut self, bytes: &[u8]) -> ParseResult<()> {
@@ -106,7 +94,7 @@ where
 {
     pub fn new(io_handle: T, read_timeout_ms: usize, max_frame_size: usize) -> Self {
         let framer = SmdpFramer::new(max_frame_size);
-        let handler = SmdpIoHandler::new(io_handle, framer, read_timeout_ms, max_frame_size);
+        let handler = SmdpIoHandler::new(io_handle, framer, read_timeout_ms);
         Self {
             io_handler: handler,
         }
@@ -200,18 +188,14 @@ mod tests {
         test_utils::*,
     };
     use rand::{Rng, thread_rng};
-    use std::{
-        io::Cursor,
-        sync::mpsc::{Sender, TryRecvError},
-        thread::JoinHandle,
-    };
+    use std::io::Cursor;
 
     /* FRAMER TESTING */
     #[test]
     fn test_one_stx_one_edx() {
         let mut framer = make_framer();
         let data = vec![STX, 0x10, 0x20, 0x30, 0x40, 0x50, EDX];
-        let frame = framer.push_bytes(&data).unwrap();
+        let frame = framer.push_bytes(&data).unwrap().unwrap();
         assert_eq!(
             frame,
             Bytes::from(vec![STX, 0x10, 0x20, 0x30, 0x40, 0x50, EDX])
@@ -222,7 +206,7 @@ mod tests {
     fn test_multiple_stx_one_edx() {
         let mut framer = make_framer();
         let data = vec![EDX, EDX, 0x09, STX, STX, 0x10, 0x20, 0x30, 0x40, 0x50, EDX];
-        let frame = framer.push_bytes(&data).unwrap();
+        let frame = framer.push_bytes(&data).unwrap().unwrap();
         // Should start from the last STX
         assert_eq!(
             frame,
@@ -234,7 +218,7 @@ mod tests {
     fn test_multiple_stx_multiple_edx() {
         let mut framer = make_framer();
         let data = vec![STX, STX, 0x10, 0x20, 0x30, 0x40, 0x50, EDX, 0x60, EDX];
-        let frame = framer.push_bytes(&data).unwrap();
+        let frame = framer.push_bytes(&data).unwrap().unwrap();
         // Should start from the last STX and end at the first EDX after it
         assert_eq!(
             frame,
@@ -246,7 +230,7 @@ mod tests {
     fn test_multiple_stx_separated_one_edx() {
         let mut framer = make_framer();
         let data = vec![STX, 0x01, 0x02, STX, 0x10, 0x20, 0x30, 0x40, 0x50, EDX];
-        let frame = framer.push_bytes(&data).unwrap();
+        let frame = framer.push_bytes(&data).unwrap().unwrap();
         // Should start from the last STX
         assert_eq!(
             frame,
@@ -260,176 +244,134 @@ mod tests {
         let data = vec![
             EDX, STX, 0x01, 0x02, STX, 0x10, 0x19, 0x45, 0x20, 0x30, 0x40, 0x50, EDX, 0x60, EDX,
         ];
-        let frame = framer.push_bytes(&data).unwrap();
+        let frame = framer.push_bytes(&data).unwrap().unwrap();
         // Should start from the last STX and end at the first EDX after it
         assert_eq!(
             frame,
             Bytes::from(vec![STX, 0x10, 0x19, 0x45, 0x20, 0x30, 0x40, 0x50, EDX])
         );
     }
+
+    #[test]
+    fn test_framer_accumulates_across_pushes() {
+        let mut framer = make_framer();
+        // Push STX + partial payload — no EDX yet
+        assert!(framer.push_bytes(&[STX, 0x10, 0x20]).unwrap().is_none());
+        // Push rest of payload + EDX — frame should complete
+        let frame = framer.push_bytes(&[0x30, 0x40, 0x50, EDX]).unwrap().unwrap();
+        assert_eq!(
+            frame,
+            Bytes::from(vec![STX, 0x10, 0x20, 0x30, 0x40, 0x50, EDX])
+        );
+    }
+
+    #[test]
+    fn test_framer_returns_none_without_stx() {
+        let mut framer = make_framer();
+        assert!(framer.push_bytes(&[0x10, 0x20, 0x30]).unwrap().is_none());
+    }
+
+    #[test]
+    fn test_framer_returns_none_with_stx_but_no_edx() {
+        let mut framer = make_framer();
+        assert!(framer.push_bytes(&[STX, 0x10, 0x20]).unwrap().is_none());
+    }
     /* IOHANDLER TESTING */
     #[test]
-    fn test_io_read_bytes_no_chunk_delay_long_stream() {
-        // Create random data
-        let mut rng = thread_rng();
-        let mut data: [u8; 1024] = [0; 1024];
-        rng.fill(&mut data);
-        let mut data_reader = Cursor::new(data.clone());
-
-        // Build MockIO
-        let writer = |_: &[u8]| return Ok(0usize);
-        let reader = |buf: &mut [u8]| data_reader.read(buf);
-        let mock_io = MockIo::new(reader, writer);
-
-        // Build MockFramer
-        let mock_framer = MockFramer::new(|buf| Ok(Bytes::copy_from_slice(buf)));
-
-        // Build IoHandler and verify read is correct
-        let mut handler = SmdpIoHandler::new(mock_io, mock_framer, 200, 1024);
-        let resp = handler.poll_once();
-        assert!(resp.is_ok());
-        assert_eq!(resp.unwrap(), Bytes::copy_from_slice(&data));
-    }
-    #[test]
-    fn test_io_read_bytes_no_chunk_delay_short_stream() {
-        // Create random data
+    fn test_io_early_return_on_frame() {
+        // MockFramer returns Some on every push, so poll_once should return
+        // immediately after the first chunk rather than waiting for the timeout.
         let mut rng = thread_rng();
         let mut data: [u8; 20] = [0; 20];
         rng.fill(&mut data);
         let mut data_reader = Cursor::new(data.clone());
 
-        // Build MockIO
-        let writer = |_: &[u8]| return Ok(0usize);
-        let reader = |buf: &mut [u8]| data_reader.read(buf);
-        let mock_io = MockIo::new(reader, writer);
+        let mock_io = MockIo::new(
+            |buf| data_reader.read(buf),
+            |_| Ok(0usize),
+        );
+        let mock_framer = MockFramer::new(|buf| Ok(Some(Bytes::copy_from_slice(buf))));
 
-        // Build MockFramer
-        let mock_framer = MockFramer::new(|buf| Ok(Bytes::copy_from_slice(buf)));
-
-        // Build IoHandler and verify read is correct
-        let mut handler = SmdpIoHandler::new(mock_io, mock_framer, 200, 1024);
+        let mut handler = SmdpIoHandler::new(mock_io, mock_framer, 200);
+        let start = Instant::now();
         let resp = handler.poll_once();
+        let elapsed = start.elapsed();
+
         assert!(resp.is_ok());
         assert_eq!(resp.unwrap(), Bytes::copy_from_slice(&data));
+        // Should return well before the 200ms timeout
+        assert!(elapsed < Duration::from_millis(50));
     }
+
     #[test]
-    fn test_io_read_bytes_no_50ms_chunk_delay() {
-        // Create random data
+    fn test_io_early_return_with_chunk_delay() {
+        // Even with a 50ms delay per IO read, poll_once should return after
+        // the first successful chunk rather than collecting until timeout.
         let mut rng = thread_rng();
-        let mut data: [u8; 1024] = [0; 1024];
+        let mut data: [u8; 20] = [0; 20];
         rng.fill(&mut data);
         let mut data_reader = Cursor::new(data.clone());
 
-        // Build MockIO with a delayed sender
-        let writer = |_: &[u8]| return Ok(0usize);
-        let reader = |buf: &mut [u8]| {
-            std::thread::sleep(Duration::from_millis(50));
-            data_reader.read(buf)
-        };
-        let mock_io = MockIo::new(reader, writer);
+        let mock_io = MockIo::new(
+            |buf| {
+                std::thread::sleep(Duration::from_millis(50));
+                data_reader.read(buf)
+            },
+            |_| Ok(0usize),
+        );
+        let mock_framer = MockFramer::new(|buf| Ok(Some(Bytes::copy_from_slice(buf))));
 
-        // Build MockFramer
-        let mock_framer = MockFramer::new(|buf| Ok(Bytes::copy_from_slice(buf)));
-
-        // Build IoHandler and verify read is correct
-        let mut handler = SmdpIoHandler::new(mock_io, mock_framer, 200, 1024);
+        let mut handler = SmdpIoHandler::new(mock_io, mock_framer, 500);
+        let start = Instant::now();
         let resp = handler.poll_once();
+        let elapsed = start.elapsed();
+
         assert!(resp.is_ok());
         assert_eq!(resp.unwrap(), Bytes::copy_from_slice(&data));
+        // Should return after ~50ms (one read), not the full 500ms timeout
+        assert!(elapsed < Duration::from_millis(200));
     }
+
     #[test]
-    fn test_io_read_too_many_bytes() {
-        // Create random data
-        let mut rng = thread_rng();
-        let mut data: [u8; 2048] = [0; 2048];
-        rng.fill(&mut data);
-        let mut data_reader = Cursor::new(data.clone());
+    fn test_io_timeout_when_framer_never_completes() {
+        // Framer always returns None — poll_once should time out.
+        let mock_io = MockIo::new(
+            |_| Err(std::io::Error::new(ErrorKind::WouldBlock, "Would block")),
+            |_| Ok(0usize),
+        );
+        let mock_framer = MockFramer::new(|_| Ok(None));
 
-        // Build MockIO with a delayed sender
-        let writer = |_: &[u8]| return Ok(0usize);
-        let reader = |buf: &mut [u8]| {
-            std::thread::sleep(Duration::from_millis(50));
-            data_reader.read(buf)
-        };
-        let mock_io = MockIo::new(reader, writer);
-
-        // Build MockFramer
-        let mock_framer = MockFramer::new(|buf| Ok(Bytes::copy_from_slice(buf)));
-
-        // Build IoHandler and verify read is correct
-        let mut handler = SmdpIoHandler::new(mock_io, mock_framer, 200, 1024);
+        let mut handler = SmdpIoHandler::new(mock_io, mock_framer, 20);
         let resp = handler.poll_once();
         assert!(resp.is_err());
     }
+
     #[test]
     fn test_io_lower_read_error() {
-        // Create random data
-        let mut rng = thread_rng();
-        let mut data: [u8; 2048] = [0; 2048];
-        rng.fill(&mut data);
+        let mock_io = MockIo::new(
+            |_| Err(std::io::Error::new(ErrorKind::Interrupted, "Interrupted")),
+            |_| Ok(0usize),
+        );
+        let mock_framer = MockFramer::new(|buf| Ok(Some(Bytes::copy_from_slice(buf))));
 
-        // Build MockIO with a delayed sender
-        let writer = |_: &[u8]| return Ok(0usize);
-        let reader = |_: &mut [u8]| Err(std::io::Error::new(ErrorKind::Interrupted, "Interrupted"));
-        let mock_io = MockIo::new(reader, writer);
-
-        // Build MockFramer
-        let mock_framer = MockFramer::new(|buf| Ok(Bytes::copy_from_slice(buf)));
-
-        // Build IoHandler and verify read is correct
-        let mut handler = SmdpIoHandler::new(mock_io, mock_framer, 200, 1024);
+        let mut handler = SmdpIoHandler::new(mock_io, mock_framer, 200);
         let resp = handler.poll_once();
         assert!(resp.is_err());
     }
+
     #[test]
-    fn test_io_read_timeout() {
-        // Create random data
-        let mut rng = thread_rng();
-        let mut data: [u8; 1024] = [0; 1024];
-        rng.fill(&mut data);
-        let mut data_reader = Cursor::new(data.clone());
+    fn test_io_eof_before_frame_is_error() {
+        // IO returns EOF immediately (empty cursor) — no frame possible.
+        let mut data_reader = Cursor::new(Vec::<u8>::new());
+        let mock_io = MockIo::new(
+            |buf| data_reader.read(buf),
+            |_| Ok(0usize),
+        );
+        let mock_framer = MockFramer::new(|buf| Ok(Some(Bytes::copy_from_slice(buf))));
 
-        // Create a thread that simulates a delayed sender (200ms between sends)
-        let (tx1, rx1) = std::sync::mpsc::channel();
-        let (tx2, rx2) = std::sync::mpsc::channel();
-        enum Signal {
-            End,
-        }
-
-        let jh: JoinHandle<()> = std::thread::spawn(move || {
-            loop {
-                _ = tx2.send(());
-                std::thread::sleep(Duration::from_millis(200));
-                match rx1.try_recv() {
-                    Ok(Signal::End) => break,
-                    Err(ref e) if *e == TryRecvError::Empty => continue,
-                    _ => break,
-                }
-            }
-        });
-
-        // Build MockIO with a delayed sender
-        let writer = |_: &[u8]| return Ok(0usize);
-        let main_tx1 = Sender::clone(&tx1);
-        let reader = |buf: &mut [u8]| {
-            if let Ok(_) = rx2.try_recv() {
-                let n_read = data_reader.read(buf).unwrap();
-                Ok(n_read)
-            } else {
-                return Err(std::io::Error::new(ErrorKind::WouldBlock, "Would block"));
-            }
-        };
-        let mock_io = MockIo::new(reader, writer);
-
-        // Build MockFramer
-        let mock_framer = MockFramer::new(|buf| Ok(Bytes::copy_from_slice(buf)));
-
-        // Build IoHandler with short read timeout and verify recvd bytes are incomplete.
-        let mut handler = SmdpIoHandler::new(mock_io, mock_framer, 20, 1024);
+        let mut handler = SmdpIoHandler::new(mock_io, mock_framer, 200);
         let resp = handler.poll_once();
-        assert_ne!(resp.unwrap().as_ref(), data);
-        _ = main_tx1.send(Signal::End);
-        _ = jh.join();
+        assert!(resp.is_err());
     }
 
     /* SMDP PROTOCOL TESTING */
